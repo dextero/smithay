@@ -134,6 +134,10 @@ required-features = ["backend_vulkan"]
 name = "buffer_test"
 required-features = ["backend_drm", "backend_gbm", "backend_egl", "backend_vulkan", "renderer_gl"]
 
+[[example]]
+name = "backend_ratatui"
+required-features = ["backend_ratatui"]
+
 [[bench]]
 name = "benchmark"
 harness = false
