@@ -33,6 +33,9 @@ pub mod glow;
 #[cfg(feature = "renderer_pixman")]
 pub mod pixman;
 
+#[cfg(feature = "backend_ratatui")]
+pub mod ratatui;
+
 mod color;
 pub use color::Color32F;
 
