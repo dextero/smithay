@@ -1,4 +1,3 @@
-'''
 use smithay::backend::ratatui::RatatuiBackend;
 
 fn main() -> Result<(), std::io::Error> {
@@ -13,4 +12,3 @@ fn main() -> Result<(), std::io::Error> {
 
     Ok(())
 }
-'''
