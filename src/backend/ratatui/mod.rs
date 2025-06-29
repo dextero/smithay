@@ -7,12 +7,13 @@ use crossterm::{
 };
 use ratatui::{prelude::{CrosstermBackend, Terminal}, widgets::Paragraph};
 use std::{io, time::Duration};
+use crate::backend::renderer::Color32F;
 
 /// A backend for smithay that renders to a tty.
 #[derive(Debug)]
 pub struct RatatuiBackend {
     renderer: RatatuiRenderer,
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    pub terminal: Terminal<CrosstermBackend<io::Stdout>>,
 }
 
 impl RatatuiBackend {

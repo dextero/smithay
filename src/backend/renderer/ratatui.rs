@@ -1,11 +1,12 @@
 #![cfg_attr(docsrs, doc(cfg(feature = "ratatui_backend")))]
 
 use crate::backend::renderer::{
-    sync,
-    ContextId, DebugFlags, Frame, Renderer, RendererSuper, Texture, TextureFilter,
+    Frame, Renderer, Texture, RendererSuper, TextureFilter, DebugFlags, sync, ContextId,
+    Color32F,
 };
+use std::any::Any;
 use crate::utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform};
-use std::marker::PhantomData;
+
 
 /// A renderer for the ratatui backend
 #[derive(Debug)]
@@ -20,46 +21,28 @@ pub struct CompositorWidget;
 pub struct CompositorWidgetState;
 
 /// A texture for the ratatui renderer
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RatatuiTexture {
-    pixels: Vec<u32>,
-    width: u32,
-    height: u32,
-}
+#[derive(Debug)]
+pub struct RatatuiTexture;
 
 impl Texture for RatatuiTexture {
     fn width(&self) -> u32 {
-        self.width
+        todo!()
     }
 
     fn height(&self) -> u32 {
-        self.height
+        todo!()
     }
 
     fn format(&self) -> Option<crate::backend::allocator::Fourcc> {
-        Some(crate::backend::allocator::Fourcc::Argb8888)
-    }
-}
-
-impl Texture for ratatui::buffer::Buffer {
-    fn width(&self) -> u32 {
-        self.area.width as u32
-    }
-
-    fn height(&self) -> u32 {
-        self.area.height as u32
-    }
-
-    fn format(&self) -> Option<crate::backend::allocator::Fourcc> {
-        None
+        todo!()
     }
 }
 
 /// A frame for the ratatui renderer
+#[derive(Debug)]
 pub struct RatatuiFrame<'frame, 'buffer> {
-    renderer: &'frame mut RatatuiRenderer,
-    buffer: &'frame mut ratatui::buffer::Buffer,
-    _phantom: PhantomData<&'buffer ()>,
+    _frame: PhantomData<&'frame ()>,
+    _buffer: PhantomData<&'buffer ()>
 }
 
 impl Frame for RatatuiFrame<'_, '_> {
@@ -67,24 +50,20 @@ impl Frame for RatatuiFrame<'_, '_> {
     type TextureId = RatatuiTexture;
 
     fn context_id(&self) -> ContextId<Self::TextureId> {
-        ContextId::new()
+        todo!()
     }
 
-    fn clear(
-        &mut self,
-        _color: crate::backend::renderer::Color32F,
-        _at: &[Rectangle<i32, Physical>],
-    ) -> Result<(), Self::Error> {
-        Ok(())
+    fn clear(&mut self, _color: Color32F, _at: &[Rectangle<i32, Physical>]) -> Result<(), Self::Error> {
+        todo!()
     }
 
     fn draw_solid(
         &mut self,
         _dst: Rectangle<i32, Physical>,
         _damage: &[Rectangle<i32, Physical>],
-        _color: crate::backend::renderer::Color32F,
+        _color: Color32F,
     ) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 
     fn render_texture_from_to(
@@ -97,19 +76,19 @@ impl Frame for RatatuiFrame<'_, '_> {
         _src_transform: Transform,
         _alpha: f32,
     ) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 
     fn transformation(&self) -> Transform {
-        Transform::Normal
+        todo!()
     }
 
     fn wait(&mut self, _sync: &sync::SyncPoint) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 
     fn finish(self) -> Result<sync::SyncPoint, Self::Error> {
-        Ok(sync::SyncPoint::signaled())
+        todo!()
     }
 }
 
@@ -117,29 +96,26 @@ impl RendererSuper for RatatuiRenderer {
     type Error = std::convert::Infallible;
     type TextureId = RatatuiTexture;
     type Framebuffer<'buffer> = ratatui::buffer::Buffer;
-    type Frame<'frame, 'buffer>
-        = RatatuiFrame<'frame, 'buffer>
-    where
-        'buffer: 'frame;
+    type Frame<'frame, 'buffer> = RatatuiFrame<'frame, 'buffer> where 'buffer: 'frame, Self: 'frame;
 }
 
 impl Renderer for RatatuiRenderer {
     fn context_id(&self) -> ContextId<Self::TextureId> {
-        ContextId::new()
+        todo!()
     }
 
     fn downscale_filter(&mut self, _filter: TextureFilter) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 
     fn upscale_filter(&mut self, _filter: TextureFilter) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 
     fn set_debug_flags(&mut self, _flags: DebugFlags) {}
 
     fn debug_flags(&self) -> DebugFlags {
-        DebugFlags::empty()
+        todo!()
     }
 
     fn render<'frame, 'buffer>(
@@ -147,19 +123,12 @@ impl Renderer for RatatuiRenderer {
         framebuffer: &'frame mut Self::Framebuffer<'buffer>,
         _output_size: Size<i32, Physical>,
         _dst_transform: Transform,
-    ) -> Result<Self::Frame<'frame, 'buffer>, Self::Error>
-    where
-        'buffer: 'frame,
-    {
-        Ok(RatatuiFrame {
-            renderer: self,
-            buffer: framebuffer,
-            _phantom: PhantomData,
-        })
+    ) -> Result<Self::Frame<'frame, 'buffer>, Self::Error> where 'buffer: 'frame {
+        todo!()
     }
 
     fn wait(&mut self, _sync: &sync::SyncPoint) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 }
 
@@ -171,11 +140,7 @@ impl crate::backend::renderer::ImportMem for RatatuiRenderer {
         size: Size<i32, BufferCoord>,
         _flipped: bool,
     ) -> Result<Self::TextureId, Self::Error> {
-        Ok(RatatuiTexture {
-            pixels: data.iter().map(|x| *x as u32).collect(),
-            width: size.w as u32,
-            height: size.h as u32,
-        })
+        todo!()
     }
 
     fn update_memory(
@@ -184,10 +149,12 @@ impl crate::backend::renderer::ImportMem for RatatuiRenderer {
         _data: &[u8],
         _region: Rectangle<i32, BufferCoord>,
     ) -> Result<(), Self::Error> {
-        Ok(())
+        todo!()
     }
 
-    fn mem_formats(&self) -> Box<dyn Iterator<Item = crate::backend::allocator::Fourcc>> {
-        Box::new(vec![crate::backend::allocator::Fourcc::Argb8888].into_iter())
+    fn mem_formats(
+        &self,
+    ) -> Box<dyn Iterator<Item = crate::backend::allocator::Fourcc>> {
+        todo!()
     }
 }

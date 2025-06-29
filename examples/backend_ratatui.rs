@@ -1,10 +1,10 @@
-use smithay::backend::renderer::{Renderer, Frame};
+use smithay::backend::renderer::{Renderer, Frame, Color32F};
 use smithay::backend::ratatui::RatatuiBackend;
 use smithay::reexports::calloop::EventLoop;
-use wayland_server::{Display, socket::ListeningSocket, DisplayHandle};
+use wayland_server::{Display, socket::ListeningSocket};
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::shm::ShmState;
-use smithay::utils::{Size, Physical, Transform};
+use smithay::utils::{Size, Transform};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop = EventLoop::try_new()?;
@@ -21,8 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dst_transform = Transform::Normal; // Example transform
 
     loop {
-        let mut frame = backend.renderer().render(backend.renderer().terminal.backend_mut().buffer(), output_size, dst_transform)?;
-        frame.clear([0.0, 0.0, 0.0, 1.0], &[])?;
+        let mut frame = backend.renderer().render(backend.terminal.backend_mut().buffer(), output_size, dst_transform)?;
+        frame.clear(Color32F::from([0.0, 0.0, 0.0, 1.0]), &[])?;
         frame.finish()?;
 
         if backend.handle_input()? {
