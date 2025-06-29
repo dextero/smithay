@@ -5,13 +5,14 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::prelude::{CrosstermBackend, Terminal};
+use ratatui::{prelude::{CrosstermBackend, Terminal}, widgets::Paragraph};
 use std::{io, time::Duration};
 
 /// A backend for smithay that renders to a tty.
 #[derive(Debug)]
 pub struct RatatuiBackend {
-    renderer: RatatuiRenderer<CrosstermBackend<io::Stdout>>,
+    renderer: RatatuiRenderer,
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
 }
 
 impl RatatuiBackend {
@@ -21,13 +22,13 @@ impl RatatuiBackend {
         enable_raw_mode()?;
         execute!(stdout, EnterAlternateScreen)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-        let renderer = RatatuiRenderer::new(terminal);
-        Ok(RatatuiBackend { renderer })
+        let renderer = RatatuiRenderer;
+        Ok(RatatuiBackend { renderer, terminal })
     }
 
     /// Draw to the terminal.
     pub fn draw(&mut self) -> Result<(), io::Error> {
-        self.renderer.terminal.draw(|f| {
+        self.terminal.draw(|f| {
             let size = f.size();
             let block = Paragraph::new("Hello, world!");
             f.render_widget(block, size);
@@ -50,7 +51,7 @@ impl RatatuiBackend {
     }
 
     /// Get a mutable reference to the renderer.
-    pub fn renderer(&mut self) -> &mut RatatuiRenderer<CrosstermBackend<io::Stdout>> {
+    pub fn renderer(&mut self) -> &mut RatatuiRenderer {
         &mut self.renderer
     }
 }
@@ -58,7 +59,7 @@ impl RatatuiBackend {
 impl Drop for RatatuiBackend {
     fn drop(&mut self) {
         disable_raw_mode().unwrap();
-        execute!(self.renderer.terminal.backend_mut(), LeaveAlternateScreen).unwrap();
-        self.renderer.terminal.show_cursor().unwrap();
+        execute!(self.terminal.backend_mut(), LeaveAlternateScreen).unwrap();
+        self.terminal.show_cursor().unwrap();
     }
 }
