@@ -1,4 +1,4 @@
-'''use smithay::backend::renderer::Renderer;
+use smithay::backend::renderer::Renderer;
 use smithay::backend::ratatui::RatatuiBackend;
 use smithay::reexports::calloop::{EventLoop, LoopSignal};
 use smithay::reexports::wayland_server::Display;
@@ -34,4 +34,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-'''

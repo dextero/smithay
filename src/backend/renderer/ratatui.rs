@@ -1,13 +1,11 @@
 #![cfg_attr(docsrs, doc(cfg(feature = "ratatui_backend")))]
 
 use crate::backend::renderer::{
-    element::RenderElement,
     sync,
-    utils::{draw_render_elements, on_commit_buffer_handler},
     ContextId, DebugFlags, Frame, Renderer, RendererSuper, Texture, TextureFilter,
 };
-use crate::utils::{Buffer as BufferCoord, Physical, Point, Rectangle, Scale, Size, Transform};
-use std::{any::Any, borrow::Cow, marker::PhantomData};
+use crate::utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform};
+use std::marker::PhantomData;
 
 /// A renderer for the ratatui backend
 #[derive(Debug)]
