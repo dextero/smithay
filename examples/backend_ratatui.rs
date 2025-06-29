@@ -1,27 +1,28 @@
-use smithay::backend::renderer::Renderer;
+use smithay::backend::renderer::{Renderer, Frame};
 use smithay::backend::ratatui::RatatuiBackend;
-use smithay::reexports::calloop::{EventLoop, LoopSignal};
-use smithay::reexports::wayland_server::Display;
+use smithay::reexports::calloop::EventLoop;
+use wayland_server::{Display, socket::ListeningSocket, DisplayHandle};
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::shm::ShmState;
-use smithay::wayland::socket::ListeningSocket;
-use std::sync::Arc;
+use smithay::utils::{Size, Physical, Transform};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut event_loop = EventLoop::try_new()?;
     let mut display = Display::new()?;
-    let _shm_state = ShmState::new(&mut display, vec![]);
-    let _compositor_state = CompositorState::new(&mut display);
+    let display_handle = display.handle();
+    let _shm_state = ShmState::new(&display_handle, vec![]);
+    let _compositor_state = CompositorState::new(&display_handle);
 
     let socket = ListeningSocket::bind("wayland-5").unwrap();
 
     let mut backend = RatatuiBackend::new()?;
 
-    let loop_signal = event_loop.get_signal();
+    let output_size = Size::from((80, 24)); // Example size
+    let dst_transform = Transform::Normal; // Example transform
 
     loop {
-        let mut frame = backend.renderer().render(backend.renderer().size(), backend.renderer().transform())?;
-        frame.clear([0.0, 0.0, 0.0, 1.0])?;
+        let mut frame = backend.renderer().render(backend.renderer().terminal.backend_mut().buffer(), output_size, dst_transform)?;
+        frame.clear([0.0, 0.0, 0.0, 1.0], &[])?;
         frame.finish()?;
 
         if backend.handle_input()? {
