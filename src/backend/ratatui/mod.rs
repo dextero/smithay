@@ -1,28 +1,22 @@
 //! A backend for smithay that renders to a tty.
 use crate::backend::renderer::ratatui::RatatuiRenderer;
-use crossterm::{
-    event::{self, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use crossterm::
+    event::{self, Event, KeyCode}
+;
 use ratatui::{prelude::{CrosstermBackend, Terminal}, widgets::Paragraph};
 use std::{io, time::Duration};
-use crate::backend::renderer::Color32F;
 
 /// A backend for smithay that renders to a tty.
 #[derive(Debug)]
 pub struct RatatuiBackend {
     renderer: RatatuiRenderer,
-    pub terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
 }
 
 impl RatatuiBackend {
     /// Create a new ratatui backend.
     pub fn new() -> Result<Self, io::Error> {
-        let mut stdout = io::stdout();
-        enable_raw_mode()?;
-        execute!(stdout, EnterAlternateScreen)?;
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let terminal = ratatui::init();
         let renderer = RatatuiRenderer;
         Ok(RatatuiBackend { renderer, terminal })
     }
@@ -59,8 +53,6 @@ impl RatatuiBackend {
 
 impl Drop for RatatuiBackend {
     fn drop(&mut self) {
-        disable_raw_mode().unwrap();
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen).unwrap();
-        self.terminal.show_cursor().unwrap();
+        ratatui::restore();
     }
 }

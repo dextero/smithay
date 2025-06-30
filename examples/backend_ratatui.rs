@@ -1,7 +1,7 @@
 use smithay::backend::renderer::{Renderer, Frame, Color32F};
 use smithay::backend::ratatui::RatatuiBackend;
 use smithay::reexports::calloop::EventLoop;
-use wayland_server::{Display, socket::ListeningSocket};
+use wayland_server::{Display, ListeningSocket};
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::shm::ShmState;
 use smithay::utils::{Size, Transform};
@@ -16,9 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket = ListeningSocket::bind("wayland-5").unwrap();
 
     let mut backend = RatatuiBackend::new()?;
-
-    let output_size = Size::from((80, 24)); // Example size
-    let dst_transform = Transform::Normal; // Example transform
 
     loop {
         let mut frame = backend.renderer().render(backend.terminal.backend_mut().buffer(), output_size, dst_transform)?;
