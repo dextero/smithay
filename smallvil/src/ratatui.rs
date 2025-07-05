@@ -52,6 +52,7 @@ pub fn init_ratatui(
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
     let size = backend.renderer().window_size();
+    eprintln!("window size: {size:?}");
     let mut framebuffer = Some(RatatuiTexture::from(Buffer::empty(Rect::new(0, 0, size.w as u16, size.h as u16))));
 
     let output = output.clone();

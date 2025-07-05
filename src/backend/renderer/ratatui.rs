@@ -9,6 +9,7 @@ use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
+use tracing::warn;
 
 use crate::backend::allocator::dmabuf::DmabufMappingMode;
 use crate::backend::allocator::{Buffer, Fourcc};
@@ -80,17 +81,33 @@ impl ImportMemWl for RatatuiRenderer {
     ) -> Result<Self::TextureId, Self::Error> {
         with_buffer_contents(buffer, |ptr, len, data| -> Result<Self::TextureId, Self::Error> {
             let size = Size::new(data.width.try_into().unwrap(), data.height.try_into().unwrap());
-            let fourcc =
-                shm_format_to_fourcc(data.format).ok_or(RatatuiError::UnsupportedWlPixelFormat(data.format))?;
+            let fourcc = shm_format_to_fourcc(data.format)
+                .ok_or(RatatuiError::UnsupportedWlPixelFormat(data.format))?;
             let buf = match fourcc {
-                Fourcc::Argb8888 => buffer_from_ptr_len::<{ Fourcc::Argb8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Xrgb8888 => buffer_from_ptr_len::<{ Fourcc::Xrgb8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Rgba8888 => buffer_from_ptr_len::<{ Fourcc::Rgba8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Rgbx8888 => buffer_from_ptr_len::<{ Fourcc::Rgbx8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Abgr8888 => buffer_from_ptr_len::<{ Fourcc::Abgr8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Xbgr8888 => buffer_from_ptr_len::<{ Fourcc::Xbgr8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Bgra8888 => buffer_from_ptr_len::<{ Fourcc::Bgra8888 as _ }>(ptr as *const _, len, size),
-                Fourcc::Bgrx8888 => buffer_from_ptr_len::<{ Fourcc::Bgrx8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Argb8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Argb8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Xrgb8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Xrgb8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Rgba8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Rgba8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Rgbx8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Rgbx8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Abgr8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Abgr8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Xbgr8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Xbgr8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Bgra8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Bgra8888 as _ }>(ptr as *const _, len, size)
+                }
+                Fourcc::Bgrx8888 => {
+                    buffer_from_ptr_len::<{ Fourcc::Bgrx8888 as _ }>(ptr as *const _, len, size)
+                }
                 f => todo!("unsupported format: {f:?}"),
             };
             Ok(RatatuiTexture::from(buf))
@@ -333,15 +350,26 @@ impl RatatuiFrame<'_, '_> {
     fn fill_rect(&mut self, rect: &Rectangle<i32, Physical>, color: Color) {
         let mut buf = self.framebuffer.buffer.lock().unwrap();
 
-        for y in rect.loc.y..rect.loc.y + rect.size.h {
-            for x in rect.loc.x..rect.loc.x + rect.size.w {
+        let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
+        let x_max = (rect.loc.x + rect.size.w).clamp(0, buf.area.width as i32);
+        let y_min = rect.loc.y.clamp(0, buf.area.height as i32);
+        let y_max = (rect.loc.y + rect.size.h).clamp(0, buf.area.height as i32);
+
+        for y in y_min..y_max {
+            for x in x_min..x_max {
                 // TODO wtf is going on
-                buf
-                    .cell_mut((
-                        x.try_into().expect("x > u16::MAX"),
-                        y.try_into().expect("y > u16::MAX"),
-                    ))
-                    .map(|cell| cell.set_bg(color));
+                let cell = buf.cell_mut((
+                    x.try_into().expect("x > u16::MAX"),
+                    y.try_into().expect("y > u16::MAX"),
+                ));
+                if let Some(cell) = cell {
+                    cell.set_bg(color);
+                } else {
+                    todo!(
+                        "WTF pos {x}, {y} is out of {}x{} bounds",
+                        buf.area.width, buf.area.height
+                    );
+                }
             }
         }
     }
@@ -381,15 +409,16 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
         color: Color32F,
     ) -> Result<(), Self::Error> {
         let color = color_to_ratatui(color);
-        for rect in damage {
-            let rect = {
-                let loc = rect.loc.constrain(dst);
-                let size = rect.size.clamp((0, 0), (dst.size.to_point() - loc).to_size());
-                Rectangle::new(loc, size)
-            };
+        self.fill_rect(&dst, color);
+        //for rect in damage {
+        //    let rect = {
+        //        let loc = rect.loc.constrain(dst);
+        //        let size = rect.size.clamp((0, 0), (dst.size.to_point() - loc).to_size());
+        //        Rectangle::new(loc, size)
+        //    };
 
-            self.fill_rect(&rect, color);
-        }
+        //    self.fill_rect(&rect, color);
+        //}
 
         Ok(())
     }
@@ -406,17 +435,31 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
     ) -> Result<(), Self::Error> {
         // TODO src dst
         let mut buf = self.framebuffer.buffer.lock().unwrap();
-        for rect in damage {
-            for y in rect.loc.y..rect.loc.y + rect.size.h {
-                for x in rect.loc.x..rect.loc.x + rect.size.w {
+        let rect = _dst;
+        //for rect in damage {
+            let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
+            let x_max = (rect.loc.x + rect.size.w).clamp(0, buf.area.width as i32);
+            let y_min = rect.loc.y.clamp(0, buf.area.height as i32);
+            let y_max = (rect.loc.y + rect.size.h).clamp(0, buf.area.height as i32);
+
+            for y in y_min..y_max {
+                for x in x_min..x_max {
                     let xf = x as f32 / buf.area.width as f32;
                     let yf = y as f32 / buf.area.height as f32;
                     let color = texture.get_pixel(xf, yf);
                     // TODO wtf is going on
-                    buf.cell_mut((x as u16, y as u16)).map(|cell| cell.set_bg(color));
+                    let cell = buf.cell_mut((x as u16, y as u16));
+                    if let Some(cell) = cell {
+                        cell.set_bg(color);
+                    } else {
+                        todo!(
+                            "WTF pos {x}, {y} is out of {}x{} bounds",
+                            buf.area.width, buf.area.height
+                        );
+                    }
                 }
             }
-        }
+        //}
         Ok(())
     }
 
