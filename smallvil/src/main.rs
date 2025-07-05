@@ -6,6 +6,7 @@ mod grabs;
 mod input;
 mod state;
 mod winit;
+mod ratatui;
 
 use smithay::reexports::{
     calloop::EventLoop,
@@ -36,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_handle,
     };
 
-    crate::winit::init_winit(&mut event_loop, &mut data)?;
+    crate::ratatui::init_ratatui(&mut event_loop, &mut data)?;
 
     let mut args = std::env::args().skip(1);
     let flag = args.next();

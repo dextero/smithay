@@ -1,17 +1,15 @@
 use std::time::Duration;
 
+use ::ratatui::{buffer::Buffer, layout::Rect};
 use crossterm::event::Event;
 use smithay::{
     backend::{
         ratatui,
-        renderer::{
-            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer,
-            Renderer,
-        },
+        renderer::{damage::OutputDamageTracker, ratatui::RatatuiTexture, Color32F},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Rectangle, Size, Transform},
+    utils::{Size, Transform},
 };
 
 use crate::{CalloopData, Smallvil};
@@ -65,10 +63,20 @@ pub fn init_ratatui(
                     None,
                 );
             }
-            Event::Key(event) => state.process_input_event(event),
-            Event::Mouse(event) => state.process_input_event(event),
+            Event::Key(event) => {
+                // TODO
+                //state.process_input_event(event);
+            }
+            Event::Mouse(event) => {
+                // TODO
+                //state.process_input_event(event.into_smithay());
+            }
+            _ => {}
         }
     });
+
+    let size = backend.renderer().window_size();
+    let mut framebuffer = RatatuiTexture::from(Buffer::empty(Rect::new(0, 0, size.w as u16, size.h as u16)));
 
     event_loop.handle().insert_idle(|data| {
         let display = &mut data.display_handle;
@@ -83,9 +91,10 @@ pub fn init_ratatui(
             [&state.space],
             &[],
             &mut damage_tracker,
-            [0.1, 0.1, 0.1, 1.0],
+            Color32F::BLACK,
         )
         .unwrap();
+        framebuffer = backend.renderer().swap_buffers(framebuffer).unwrap();
 
         state.space.elements().for_each(|window| {
             window.send_frame(
