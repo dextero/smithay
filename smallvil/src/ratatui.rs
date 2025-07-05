@@ -43,7 +43,7 @@ pub fn init_ratatui(
         },
     );
     let _global = output.create_global::<Smallvil>(display_handle);
-    output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
+    output.change_current_state(Some(mode), Some(Transform::Normal), None, Some((0, 0).into()));
     output.set_preferred(mode);
 
     state.space.map_output(&output, (0, 0));

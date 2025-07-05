@@ -25,6 +25,7 @@ use crate::utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform};
     feature = "use_system_lib"
 ))]
 use crate::backend::{egl::display::EGLBufferReader, renderer::ImportEgl};
+use crate::wayland::shm::{shm_format_to_fourcc, with_buffer_contents};
 
 /// A renderer for the ratatui backend
 #[derive(Debug)]
@@ -73,11 +74,27 @@ impl Drop for RatatuiRenderer {
 impl ImportMemWl for RatatuiRenderer {
     fn import_shm_buffer(
         &mut self,
-        _buffer: &wayland_server::protocol::wl_buffer::WlBuffer,
+        buffer: &wayland_server::protocol::wl_buffer::WlBuffer,
         _surface: Option<&crate::wayland::compositor::SurfaceData>,
         _damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
-        todo!()
+        with_buffer_contents(buffer, |ptr, len, data| -> Result<Self::TextureId, Self::Error> {
+            let size = Size::new(data.width.try_into().unwrap(), data.height.try_into().unwrap());
+            let fourcc =
+                shm_format_to_fourcc(data.format).ok_or(RatatuiError::UnsupportedWlPixelFormat(data.format))?;
+            let buf = match fourcc {
+                Fourcc::Argb8888 => buffer_from_ptr_len::<{ Fourcc::Argb8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Xrgb8888 => buffer_from_ptr_len::<{ Fourcc::Xrgb8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Rgba8888 => buffer_from_ptr_len::<{ Fourcc::Rgba8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Rgbx8888 => buffer_from_ptr_len::<{ Fourcc::Rgbx8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Abgr8888 => buffer_from_ptr_len::<{ Fourcc::Abgr8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Xbgr8888 => buffer_from_ptr_len::<{ Fourcc::Xbgr8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Bgra8888 => buffer_from_ptr_len::<{ Fourcc::Bgra8888 as _ }>(ptr as *const _, len, size),
+                Fourcc::Bgrx8888 => buffer_from_ptr_len::<{ Fourcc::Bgrx8888 as _ }>(ptr as *const _, len, size),
+                f => todo!("unsupported format: {f:?}"),
+            };
+            Ok(RatatuiTexture::from(buf))
+        })?
     }
 }
 
@@ -161,13 +178,21 @@ fn buffer_from_pixels<const F: u32>(
     buf
 }
 
+fn buffer_from_ptr_len<const F: u32>(
+    ptr: *const Pixel<F>,
+    len_pixels: usize,
+    size: Size<u32, Physical>,
+) -> ratatui::buffer::Buffer {
+    // SAFETY: TODO
+    let pixels: &[Pixel<F>] = unsafe { std::slice::from_raw_parts(ptr, len_pixels) };
+    buffer_from_pixels(pixels, size)
+}
+
 fn buffer_from_mapping<const F: u32>(
     map: &crate::backend::allocator::dmabuf::DmabufMapping,
     size: Size<u32, Physical>,
 ) -> ratatui::buffer::Buffer {
-    // SAFETY: TODO
-    let pixels: &[Pixel<F>] = unsafe { std::slice::from_raw_parts(map.ptr() as *const _, map.length() * 4) };
-    buffer_from_pixels(pixels, size)
+    buffer_from_ptr_len::<F>(map.ptr() as *const _, map.length() / 4, size)
 }
 
 impl ImportDma for RatatuiRenderer {
@@ -250,6 +275,10 @@ pub enum RatatuiError {
         actual: ratatui::layout::Size,
         expected: ratatui::layout::Size,
     },
+    #[error("Unsupported pixel format: {0:?}")]
+    UnsupportedWlPixelFormat(wayland_server::protocol::wl_shm::Format),
+    #[error("Buffer access error: {0:?}")]
+    BufferAccessError(#[from] crate::wayland::shm::BufferAccessError),
 }
 
 impl RatatuiTexture {
@@ -306,13 +335,13 @@ impl RatatuiFrame<'_, '_> {
 
         for y in rect.loc.y..rect.loc.y + rect.size.h {
             for x in rect.loc.x..rect.loc.x + rect.size.w {
-                let cell = buf
+                // TODO wtf is going on
+                buf
                     .cell_mut((
                         x.try_into().expect("x > u16::MAX"),
                         y.try_into().expect("y > u16::MAX"),
                     ))
-                    .unwrap();
-                cell.set_bg(color);
+                    .map(|cell| cell.set_bg(color));
             }
         }
     }
@@ -383,7 +412,8 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
                     let xf = x as f32 / buf.area.width as f32;
                     let yf = y as f32 / buf.area.height as f32;
                     let color = texture.get_pixel(xf, yf);
-                    buf.cell_mut((x as u16, y as u16)).unwrap().set_bg(color);
+                    // TODO wtf is going on
+                    buf.cell_mut((x as u16, y as u16)).map(|cell| cell.set_bg(color));
                 }
             }
         }
