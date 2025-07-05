@@ -4,13 +4,12 @@ use ::ratatui::{buffer::Buffer, layout::Rect};
 use crossterm::event::Event;
 use smithay::{
     backend::{
-        ratatui,
-        renderer::{
+        input::InputEvent, ratatui::{self, RatatuiInputBackend}, renderer::{
             damage::OutputDamageTracker,
             element::surface::WaylandSurfaceRenderElement,
             ratatui::{RatatuiRenderer, RatatuiTexture},
             Color32F,
-        },
+        }
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
@@ -72,13 +71,29 @@ pub fn init_ratatui(
                     None,
                 );
             }
-            Event::Key(_) => {
-                // TODO
-                //state.process_input_event(event);
+            Event::Key(event) => {
+                state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
+                    event: event.into()
+                });
             }
-            Event::Mouse(_) => {
-                // TODO
-                //state.process_input_event(event.into_smithay());
+            Event::Mouse(event) => {
+                let event = match event.kind {
+                    crossterm::event::MouseEventKind::Down(_)
+                    | crossterm::event::MouseEventKind::Up(_) => {
+                        InputEvent::PointerButton { event: event.into() }
+                    },
+                    crossterm::event::MouseEventKind::Drag(_)
+                    | crossterm::event::MouseEventKind::Moved => {
+                        InputEvent::PointerMotionAbsolute { event: event.into() }
+                    }
+                    crossterm::event::MouseEventKind::ScrollDown
+                    | crossterm::event::MouseEventKind::ScrollUp
+                    | crossterm::event::MouseEventKind::ScrollLeft
+                    | crossterm::event::MouseEventKind::ScrollRight => {
+                        InputEvent::PointerAxis { event: event.into() }
+                    }
+                };
+                state.process_input_event::<RatatuiInputBackend>(event);
             }
             _ => {}
         }
