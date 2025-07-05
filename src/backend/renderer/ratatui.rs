@@ -303,8 +303,8 @@ impl RatatuiTexture {
         let buf = self.buffer.lock().unwrap();
         let x = x * buf.area.width as f32;
         let y = y * buf.area.height as f32;
-        let x = x.round().clamp(0f32, buf.area.width as f32 - 1f32) as u16;
-        let y = y.round().clamp(0f32, buf.area.height as f32 - 1f32) as u16;
+        let x = u16::try_from(x.round().clamp(0f32, buf.area.width as f32 - 1f32) as i64).unwrap();
+        let y = u16::try_from(y.round().clamp(0f32, buf.area.height as f32 - 1f32) as i64).unwrap();
         buf.cell((x, y)).unwrap().bg
     }
 }
@@ -448,7 +448,7 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
                     let yf = y as f32 / buf.area.height as f32;
                     let color = texture.get_pixel(xf, yf);
                     // TODO wtf is going on
-                    let cell = buf.cell_mut((x as u16, y as u16));
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y).unwrap()));
                     if let Some(cell) = cell {
                         cell.set_bg(color);
                     } else {

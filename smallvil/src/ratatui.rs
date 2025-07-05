@@ -4,12 +4,14 @@ use ::ratatui::{buffer::Buffer, layout::Rect};
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use smithay::{
     backend::{
-        input::InputEvent, ratatui::{self, RatatuiInputBackend}, renderer::{
+        input::InputEvent,
+        ratatui::{self, RatatuiInputBackend},
+        renderer::{
             damage::OutputDamageTracker,
             element::surface::WaylandSurfaceRenderElement,
             ratatui::{RatatuiRenderer, RatatuiTexture},
             Color32F,
-        }
+        },
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
@@ -53,82 +55,95 @@ pub fn init_ratatui(
 
     let size = backend.renderer().window_size();
     eprintln!("window size: {size:?}");
-    let mut framebuffer = Some(RatatuiTexture::from(Buffer::empty(Rect::new(0, 0, size.w as u16, size.h as u16))));
+    let mut framebuffer = Some(RatatuiTexture::from(Buffer::empty(Rect::new(
+        0,
+        0,
+        u16::try_from(size.w).unwrap(),
+        u16::try_from(size.h).unwrap(),
+    ))));
 
     let output = output.clone();
-    event_loop.handle().insert_source(backend.event_source(), move |event, _, data| {
-        let display = &mut data.display_handle;
-        let state = &mut data.state;
+    event_loop
+        .handle()
+        .insert_source(backend.event_source(), move |event, _, data| {
+            let display = &mut data.display_handle;
+            let state = &mut data.state;
 
-        match event {
-            Event::Resize(width, height) => {
-                output.change_current_state(
-                    Some(Mode {
-                        size: Size::new(width.into(), height.into()),
-                        refresh: 60_000,
-                    }),
-                    None,
-                    None,
-                    None,
-                );
-            }
-            Event::Key(event) => {
-                if event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL) {
-                    state.loop_signal.stop();
+            match event {
+                Event::Resize(width, height) => {
+                    output.change_current_state(
+                        Some(Mode {
+                            size: Size::new(width.into(), height.into()),
+                            refresh: 60_000,
+                        }),
+                        None,
+                        None,
+                        None,
+                    );
                 }
-                state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
-                    event: event.into()
-                });
-            }
-            Event::Mouse(event) => {
-                let event = match event.kind {
-                    crossterm::event::MouseEventKind::Down(_)
-                    | crossterm::event::MouseEventKind::Up(_) => {
-                        InputEvent::PointerButton { event: event.into() }
-                    },
-                    crossterm::event::MouseEventKind::Drag(_)
-                    | crossterm::event::MouseEventKind::Moved => {
-                        InputEvent::PointerMotionAbsolute { event: event.into() }
+                Event::Key(event) => {
+                    if event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL) {
+                        state.loop_signal.stop();
                     }
-                    crossterm::event::MouseEventKind::ScrollDown
-                    | crossterm::event::MouseEventKind::ScrollUp
-                    | crossterm::event::MouseEventKind::ScrollLeft
-                    | crossterm::event::MouseEventKind::ScrollRight => {
-                        InputEvent::PointerAxis { event: event.into() }
-                    }
-                };
-                state.process_input_event::<RatatuiInputBackend>(event);
+                    state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
+                        event: event.into(),
+                    });
+                }
+                Event::Mouse(event) => {
+                    let event = match event.kind {
+                        crossterm::event::MouseEventKind::Down(_)
+                        | crossterm::event::MouseEventKind::Up(_) => {
+                            InputEvent::PointerButton { event: event.into() }
+                        }
+                        crossterm::event::MouseEventKind::Drag(_)
+                        | crossterm::event::MouseEventKind::Moved => {
+                            InputEvent::PointerMotionAbsolute { event: event.into() }
+                        }
+                        crossterm::event::MouseEventKind::ScrollDown
+                        | crossterm::event::MouseEventKind::ScrollUp
+                        | crossterm::event::MouseEventKind::ScrollLeft
+                        | crossterm::event::MouseEventKind::ScrollRight => {
+                            InputEvent::PointerAxis { event: event.into() }
+                        }
+                    };
+                    state.process_input_event::<RatatuiInputBackend>(event);
+                }
+                _ => {}
             }
-            _ => {}
-        }
 
-        smithay::desktop::space::render_output::<_, WaylandSurfaceRenderElement<RatatuiRenderer>, _, _>(
-            &output,
-            backend.renderer(),
-            framebuffer.as_mut().unwrap(),
-            1.0,
-            0,
-            [&state.space],
-            &[],
-            &mut damage_tracker,
-            Color32F::BLACK,
-        )
-        .unwrap();
-        framebuffer = Some(backend.renderer().swap_buffers(framebuffer.take().unwrap()).unwrap());
-
-        state.space.elements().for_each(|window| {
-            window.send_frame(
+            smithay::desktop::space::render_output::<_, WaylandSurfaceRenderElement<RatatuiRenderer>, _, _>(
                 &output,
-                state.start_time.elapsed(),
-                Some(Duration::ZERO),
-                |_, _| Some(output.clone()),
+                backend.renderer(),
+                framebuffer.as_mut().unwrap(),
+                1.0,
+                0,
+                [&state.space],
+                &[],
+                &mut damage_tracker,
+                Color32F::BLACK,
             )
-        });
+            .unwrap();
+            framebuffer = Some(
+                backend
+                    .renderer()
+                    .swap_buffers(framebuffer.take().unwrap())
+                    .unwrap(),
+            );
 
-        state.space.refresh();
-        state.popups.cleanup();
-        let _ = display.flush_clients();
-    }).unwrap();
+            state.space.elements().for_each(|window| {
+                window.send_frame(
+                    &output,
+                    state.start_time.elapsed(),
+                    Some(Duration::ZERO),
+                    |_, _| Some(output.clone()),
+                )
+            });
+
+            state.space.refresh();
+            state.popups.cleanup();
+            let _ = display.flush_clients();
+        })
+        .unwrap();
 
     Ok(())
 }
