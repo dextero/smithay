@@ -5,7 +5,12 @@ use crossterm::event::Event;
 use smithay::{
     backend::{
         ratatui,
-        renderer::{damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, ratatui::{RatatuiRenderer, RatatuiTexture}, Color32F},
+        renderer::{
+            damage::OutputDamageTracker,
+            element::surface::WaylandSurfaceRenderElement,
+            ratatui::{RatatuiRenderer, RatatuiTexture},
+            Color32F,
+        },
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
@@ -47,48 +52,41 @@ pub fn init_ratatui(
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    {
-        let output = output.clone();
-        event_loop.handle().insert_source(backend, move |event, _, data| {
-            let display = &mut data.display_handle;
-            let state = &mut data.state;
-
-            match event {
-                Event::Resize(width, height) => {
-                    output.change_current_state(
-                        Some(Mode {
-                            size: Size::new(width.into(), height.into()),
-                            refresh: 60_000,
-                        }),
-                        None,
-                        None,
-                        None,
-                    );
-                }
-                Event::Key(event) => {
-                    // TODO
-                    //state.process_input_event(event);
-                }
-                Event::Mouse(event) => {
-                    // TODO
-                    //state.process_input_event(event.into_smithay());
-                }
-                _ => {}
-            }
-        });
-    }
-
     let size = backend.renderer().window_size();
-    let mut framebuffer = RatatuiTexture::from(Buffer::empty(Rect::new(0, 0, size.w as u16, size.h as u16)));
+    let mut framebuffer = Some(RatatuiTexture::from(Buffer::empty(Rect::new(0, 0, size.w as u16, size.h as u16))));
 
-    event_loop.handle().insert_idle(move |data| {
+    let output = output.clone();
+    event_loop.handle().insert_source(backend.event_source(), move |event, _, data| {
         let display = &mut data.display_handle;
         let state = &mut data.state;
+
+        match event {
+            Event::Resize(width, height) => {
+                output.change_current_state(
+                    Some(Mode {
+                        size: Size::new(width.into(), height.into()),
+                        refresh: 60_000,
+                    }),
+                    None,
+                    None,
+                    None,
+                );
+            }
+            Event::Key(_) => {
+                // TODO
+                //state.process_input_event(event);
+            }
+            Event::Mouse(_) => {
+                // TODO
+                //state.process_input_event(event.into_smithay());
+            }
+            _ => {}
+        }
 
         smithay::desktop::space::render_output::<_, WaylandSurfaceRenderElement<RatatuiRenderer>, _, _>(
             &output,
             backend.renderer(),
-            &mut framebuffer,
+            framebuffer.as_mut().unwrap(),
             1.0,
             0,
             [&state.space],
@@ -97,7 +95,7 @@ pub fn init_ratatui(
             Color32F::BLACK,
         )
         .unwrap();
-        framebuffer = backend.renderer().swap_buffers(framebuffer).unwrap();
+        framebuffer = Some(backend.renderer().swap_buffers(framebuffer.take().unwrap()).unwrap());
 
         state.space.elements().for_each(|window| {
             window.send_frame(
@@ -111,7 +109,7 @@ pub fn init_ratatui(
         state.space.refresh();
         state.popups.cleanup();
         let _ = display.flush_clients();
-    });
+    }).unwrap();
 
     Ok(())
 }

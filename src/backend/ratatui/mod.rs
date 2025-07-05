@@ -8,17 +8,14 @@ use std::{io, time::Duration};
 #[derive(Debug)]
 pub struct RatatuiBackend {
     renderer: RatatuiRenderer,
-    event_token: Option<calloop::Token>,
 }
 
 impl RatatuiBackend {
     /// Create a new ratatui backend.
     pub fn new() -> Result<Self, io::Error> {
         let renderer = RatatuiRenderer::new();
-        let event_token = None;
         Ok(RatatuiBackend {
             renderer,
-            event_token,
         })
     }
 
@@ -31,9 +28,17 @@ impl RatatuiBackend {
     pub fn window_size(&self) -> Size<i32, crate::utils::Physical> {
         self.renderer.window_size()
     }
+
+    pub fn event_source(&self) -> RatatuiEventSource {
+        RatatuiEventSource { event_token: None }
+    }
 }
 
-impl EventSource for RatatuiBackend {
+pub struct RatatuiEventSource {
+    event_token: Option<calloop::Token>,
+}
+
+impl EventSource for RatatuiEventSource {
     type Event = crossterm::event::Event;
 
     type Metadata = ();
