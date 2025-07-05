@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use ::ratatui::{buffer::Buffer, layout::Rect};
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use smithay::{
     backend::{
         input::InputEvent, ratatui::{self, RatatuiInputBackend}, renderer::{
@@ -72,6 +72,9 @@ pub fn init_ratatui(
                 );
             }
             Event::Key(event) => {
+                if event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL) {
+                    state.loop_signal.stop();
+                }
                 state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
                     event: event.into()
                 });
