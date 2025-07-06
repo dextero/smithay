@@ -445,19 +445,68 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
             let y_min = rect.loc.y.clamp(0, buf.area.height as i32);
             let y_max = (rect.loc.y + rect.size.h).clamp(0, buf.area.height as i32);
 
-            for y in y_min..y_max {
+            let row_min = y_min / 2;
+            let row_max = (y_max + 1) / 2;
+
+            if y_min % 2 != 0 {
+                // first row
+                let y = y_min;
                 for x in x_min..x_max {
                     let xf = x as f32 / rect.size.w as f32;
                     let yf = y as f32 / rect.size.h as f32;
                     let color = texture.get_pixel(xf, yf);
-                    // TODO wtf is going on
-                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y).unwrap()));
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row_min).unwrap()));
                     if let Some(cell) = cell {
-                        cell.set_bg(color);
+                        cell.set_char('\u{2584}');
+                        cell.set_fg(color);
                     } else {
                         todo!(
                             "WTF pos {x}, {y} is out of {}x{} bounds",
                             buf.area.width, buf.area.height
+                        );
+                    }
+                }
+            }
+
+            for row in row_min..row_max {
+                // middle
+                let y_top = row * 2;
+                let y_bottom = y_top + 1;
+                for x in x_min..x_max {
+                    let xf = x as f32 / rect.size.w as f32;
+                    let yf_top = y_top as f32 / rect.size.h as f32;
+                    let yf_bottom = y_bottom as f32 / rect.size.h as f32;
+                    let color_top = texture.get_pixel(xf, yf_top);
+                    let color_bottom = texture.get_pixel(xf, yf_bottom);
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()));
+                    if let Some(cell) = cell {
+                        cell.set_char('\u{2584}');
+                        cell.set_bg(color_top);
+                        cell.set_fg(color_bottom);
+                    } else {
+                        todo!(
+                            "WTF pos {x}, {row} is out of {}x{} bounds",
+                            buf.area.width, buf.area.height
+                        );
+                    }
+                }
+            }
+
+            if y_max % 2 == 0 {
+                // last row
+                let y = y_max - 1;
+                for x in x_min..x_max {
+                    let xf = x as f32 / rect.size.w as f32;
+                    let yf = y as f32 / rect.size.h as f32;
+                    let color = texture.get_pixel(xf, yf);
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row_max).unwrap()));
+                    if let Some(cell) = cell {
+                        cell.set_char('\u{2584}');
+                        cell.set_bg(color);
+                    } else {
+                        todo!(
+                            "WTF pos {x}, {} is out of {}x{} bounds",
+                            row_max - 1, buf.area.width, buf.area.height
                         );
                     }
                 }
