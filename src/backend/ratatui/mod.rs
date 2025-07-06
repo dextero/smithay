@@ -1,14 +1,49 @@
 //! A backend for smithay that renders to a tty.
 use calloop::{EventSource, Interest, Mode, PostAction};
+use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
-use crate::{
-    backend::renderer::ratatui::RatatuiRenderer,
-    utils::Size,
-};
+use crate::{backend::renderer::ratatui::RatatuiRenderer, utils::Size};
 use std::{
-    io,
-    time::{Duration, Instant},
+    io, os::{fd::AsFd, unix::prelude::BorrowedFd}, time::{Duration, Instant}
 };
+
+#[derive(Debug)]
+struct Timer {
+    interval: Duration,
+    token: calloop::Token,
+    timer: timerfd::TimerFd,
+}
+
+impl Timer {
+    pub fn new(token: calloop::Token, interval: Duration) -> Self {
+        let mut timer = Self {
+            interval,
+            token,
+            timer: TimerFd::new().unwrap(),
+        };
+        timer.reset();
+        timer
+    }
+
+    pub fn reset(&mut self) {
+        let state = TimerState::Periodic {
+            current: Instant::now().elapsed(),
+            interval: self.interval,
+        };
+        self.timer.set_state(state, SetTimeFlags::Default);
+    }
+
+    pub fn set_interval(&mut self, interval: Duration) {
+        self.interval = interval;
+        self.reset();
+    }
+}
+
+impl AsFd for Timer {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.timer.as_fd()
+    }
+}
 
 /// A backend for smithay that renders to a tty.
 #[derive(Debug)]
@@ -33,18 +68,35 @@ impl RatatuiBackend {
         self.renderer.window_size()
     }
 
-    pub fn event_source(&self) -> RatatuiEventSource {
-        RatatuiEventSource { event_token: None }
+    /// TODO doc
+    pub fn event_source(&self, refresh_interval: Duration) -> RatatuiEventSource {
+        RatatuiEventSource { event_token: None, timer: None, refresh_interval }
     }
 }
 
 /// TODO doc
+#[derive(Debug)]
 pub struct RatatuiEventSource {
     event_token: Option<calloop::Token>,
+    timer: Option<Timer>,
+    refresh_interval: Duration,
+}
+
+/// TODO doc
+#[derive(Debug)]
+pub enum RatatuiEvent {
+    /// TODO doc
+    Redraw,
+    /// TODO doc
+    Resize(u16, u16),
+    /// TODO doc
+    Key(crossterm::event::KeyEvent),
+    /// TODO doc
+    Mouse(crossterm::event::MouseEvent),
 }
 
 impl EventSource for RatatuiEventSource {
-    type Event = crossterm::event::Event;
+    type Event = RatatuiEvent;
 
     type Metadata = ();
 
@@ -55,12 +107,21 @@ impl EventSource for RatatuiEventSource {
     fn process_events<F>(
         &mut self,
         readiness: calloop::Readiness,
-        _token: calloop::Token,
+        token: calloop::Token,
         mut callback: F,
     ) -> Result<PostAction, Self::Error>
     where
         F: FnMut(Self::Event, &mut Self::Metadata) -> Self::Ret,
     {
+        let data = &mut ();
+        if let Some(ref timer) = self.timer {
+            if token == timer.token {
+                timer.timer.read();
+                callback(RatatuiEvent::Redraw, data);
+                return Ok(PostAction::Continue)
+            }
+        }
+
         if readiness.error {
             // TODO?
             return Ok(PostAction::Disable);
@@ -70,7 +131,13 @@ impl EventSource for RatatuiEventSource {
         }
 
         while crossterm::event::poll(Duration::from_millis(0))? {
-            callback(crossterm::event::read()?, &mut ());
+            let event = match crossterm::event::read()? {
+                crossterm::event::Event::Resize(width, height) => RatatuiEvent::Resize(width, height),
+                crossterm::event::Event::Key(event) => RatatuiEvent::Key(event),
+                crossterm::event::Event::Mouse(event) => RatatuiEvent::Mouse(event),
+                _ => continue,
+            };
+            callback(event, data);
         }
         Ok(PostAction::Continue)
     }
@@ -80,11 +147,21 @@ impl EventSource for RatatuiEventSource {
         poll: &mut calloop::Poll,
         token_factory: &mut calloop::TokenFactory,
     ) -> calloop::Result<()> {
+        let timer_token = token_factory.token();
+        let timer = Timer::new(timer_token, self.refresh_interval);
+        // SAFETY: TODO
+        unsafe {
+            poll.register(&timer, Interest::READ, Mode::Level, timer_token)?;
+        }
+        self.timer = Some(timer);
+        tracing::info!("timer registered with token {timer_token:?}");
+
         let token = token_factory.token();
         // SAFETY: stdin stays valid for the entire process lifetime.
         unsafe {
             poll.register(std::io::stdin(), Interest::READ, Mode::Level, token)?;
         };
+        tracing::info!("stdin registered with token {token:?}");
         self.event_token = Some(token);
         Ok(())
     }
@@ -101,6 +178,13 @@ impl EventSource for RatatuiEventSource {
 
     fn unregister(&mut self, poll: &mut calloop::Poll) -> calloop::Result<()> {
         poll.unregister(std::io::stdin())?;
+        self.event_token = None;
+        tracing::info!("stdin unregistered");
+
+        if let Some(timer) = self.timer.take() {
+            poll.unregister(timer)?;
+            tracing::info!("timer unregistered");
+        }
         Ok(())
     }
 }
@@ -241,7 +325,11 @@ mod input {
                 KeyCode::Down => 81,
                 KeyCode::Up => 82,
                 KeyCode::NumLock => 83,
-                _ => /* duuno, handle as esc? */ 41,
+                _ =>
+                /* duuno, handle as esc? */
+                {
+                    41
+                }
             };
             code.into()
         }
