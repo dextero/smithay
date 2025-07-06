@@ -62,6 +62,9 @@ pub fn init_ratatui(
         u16::try_from(size.h).unwrap(),
     ))));
 
+    let mut frames = 0;
+    let mut render_start = std::time::Instant::now();
+
     let output = output.clone();
     event_loop
         .handle()
@@ -73,7 +76,13 @@ pub fn init_ratatui(
 
                 match event {
                     RatatuiEvent::Redraw => {
-                        eprintln!("redraw");
+                        if frames == 0 {
+                            render_start = std::time::Instant::now();
+                        }
+                        frames += 1;
+                        let render_end = std::time::Instant::now();
+                        eprintln!("FPS = {}", frames as f64 / render_end.duration_since(render_start).as_secs_f64());
+
                         smithay::desktop::space::render_output::<
                             _,
                             WaylandSurfaceRenderElement<RatatuiRenderer>,
