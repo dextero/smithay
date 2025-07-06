@@ -444,8 +444,8 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
 
             for y in y_min..y_max {
                 for x in x_min..x_max {
-                    let xf = x as f32 / buf.area.width as f32;
-                    let yf = y as f32 / buf.area.height as f32;
+                    let xf = x as f32 / rect.size.w as f32;
+                    let yf = y as f32 / rect.size.h as f32;
                     let color = texture.get_pixel(xf, yf);
                     // TODO wtf is going on
                     let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y).unwrap()));
