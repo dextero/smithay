@@ -4,6 +4,7 @@ use std::io;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
+use crossterm::ExecutableCommand;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
@@ -39,6 +40,7 @@ impl RatatuiRenderer {
     /// Create a new ratatui renderer
     pub fn new() -> Self {
         let terminal = ratatui::init();
+        std::io::stdout().execute(crossterm::event::EnableMouseCapture).unwrap();
         Self { terminal }
     }
 
@@ -68,6 +70,7 @@ impl RatatuiRenderer {
 
 impl Drop for RatatuiRenderer {
     fn drop(&mut self) {
+        let _ = std::io::stdout().execute(crossterm::event::DisableMouseCapture);
         ratatui::restore();
     }
 }
