@@ -412,15 +412,16 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
         color: Color32F,
     ) -> Result<(), Self::Error> {
         let color = color_to_ratatui(color);
-        for rect in damage {
-            let rect = {
-                let loc = rect.loc.constrain(dst);
-                let size = rect.size.clamp((0, 0), (dst.size.to_point() - loc).to_size());
-                Rectangle::new(loc, size)
-            };
+        self.fill_rect(&dst, color);
+        //for rect in damage {
+        //    let rect = {
+        //        let loc = rect.loc.constrain(dst);
+        //        let size = rect.size.clamp((0, 0), (dst.size.to_point() - loc).to_size());
+        //        Rectangle::new(loc, size)
+        //    };
 
-            self.fill_rect(&rect, color);
-        }
+        //    self.fill_rect(&rect, color);
+        //}
 
         Ok(())
     }
@@ -437,7 +438,8 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
     ) -> Result<(), Self::Error> {
         // TODO src dst
         let mut buf = self.framebuffer.buffer.lock().unwrap();
-        for rect in damage {
+        let rect = _dst;
+        //for rect in damage {
             let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
             let x_max = (rect.loc.x + rect.size.w).clamp(0, buf.area.width as i32);
             let y_min = rect.loc.y.clamp(0, buf.area.height as i32);
@@ -460,7 +462,7 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
                     }
                 }
             }
-        }
+        //}
         Ok(())
     }
 
