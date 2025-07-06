@@ -193,7 +193,6 @@ mod input {
     use std::time::Instant;
 
     use crossterm::event::{KeyCode, KeyEventKind, MouseButton, MouseEventKind};
-    use xkbcommon::xkb::keysyms;
 
     use crate::backend::input::{self, KeyboardKeyEvent};
 
@@ -291,45 +290,66 @@ mod input {
 
     impl input::KeyboardKeyEvent<Backend> for KeyEvent {
         fn key_code(&self) -> xkbcommon::xkb::Keycode {
-            let code: u32 = 8 + match self.event.code {
-                KeyCode::Char(c) if ('A'..='Z').contains(&c) => (c as u32 - 'A' as u32) + keysyms::KEY_A,
-                KeyCode::Char(c) if ('a'..='z').contains(&c) => (c as u32 - 'a' as u32) + keysyms::KEY_a,
-                KeyCode::Char(c) if ('0'..='9').contains(&c) => (c as u32 - '0' as u32) + keysyms::KEY_0,
-                KeyCode::Enter => keysyms::KEY_Return,
-                KeyCode::Esc => keysyms::KEY_Escape,
-                KeyCode::Backspace => keysyms::KEY_BackSpace,
-                KeyCode::Tab => keysyms::KEY_Tab,
-                KeyCode::Char(' ') => keysyms::KEY_space,
-                KeyCode::Char('-') => keysyms::KEY_minus,
-                KeyCode::Char('=') => keysyms::KEY_equal,
-                KeyCode::Char('[') => keysyms::KEY_bracketleft,
-                KeyCode::Char(']') => keysyms::KEY_bracketright,
-                KeyCode::Char('\\') => keysyms::KEY_backslash,
-                KeyCode::Char(';') => keysyms::KEY_semicolon,
-                KeyCode::Char('\'') => keysyms::KEY_apostrophe,
-                KeyCode::Char('`') => keysyms::KEY_grave,
-                KeyCode::Char(',') => keysyms::KEY_comma,
-                KeyCode::Char('.') => keysyms::KEY_period,
-                KeyCode::Char('/') => keysyms::KEY_slash,
-                KeyCode::CapsLock => keysyms::KEY_Caps_Lock,
-                KeyCode::F(n) if (1..=12).contains(&n) => keysyms::KEY_F1 + (n - 1) as u32,
-                KeyCode::PrintScreen => keysyms::KEY_Print,
-                KeyCode::ScrollLock => keysyms::KEY_Scroll_Lock,
-                KeyCode::Pause => keysyms::KEY_Pause,
-                KeyCode::Insert => keysyms::KEY_Insert,
-                KeyCode::Home => keysyms::KEY_Home,
-                KeyCode::PageUp => keysyms::KEY_Page_Up,
-                KeyCode::Delete => keysyms::KEY_Delete,
-                KeyCode::End => keysyms::KEY_End,
-                KeyCode::PageDown => keysyms::KEY_Page_Down,
-                KeyCode::Right => keysyms::KEY_Right,
-                KeyCode::Left => keysyms::KEY_Left,
-                KeyCode::Down => keysyms::KEY_Down,
-                KeyCode::Up => keysyms::KEY_Up,
-                KeyCode::NumLock => keysyms::KEY_Num_Lock,
-                _ => keysyms::KEY_Escape // dunno, handle as esc TODO
+            // https://gitlab.freedesktop.org/libinput/libinput/-/blob/main/include/linux/linux/input-event-codes.h
+            let code: u32 = match self.event.code {
+                KeyCode::Esc => 1,
+                KeyCode::Char('1') => 2,
+                KeyCode::Char('2') => 3,
+                KeyCode::Char('3') => 4,
+                KeyCode::Char('4') => 5,
+                KeyCode::Char('5') => 6,
+                KeyCode::Char('6') => 7,
+                KeyCode::Char('7') => 8,
+                KeyCode::Char('8') => 9,
+                KeyCode::Char('9') => 10,
+                KeyCode::Char('0') => 11,
+                KeyCode::Char('-') => 12,
+                KeyCode::Char('=') => 13,
+                KeyCode::Backspace => 14,
+                KeyCode::Tab => 15,
+                KeyCode::Char('Q') | KeyCode::Char('q') => 16,
+                KeyCode::Char('W') | KeyCode::Char('w') => 17,
+                KeyCode::Char('E') | KeyCode::Char('e') => 18,
+                KeyCode::Char('R') | KeyCode::Char('r') => 19,
+                KeyCode::Char('T') | KeyCode::Char('t') => 20,
+                KeyCode::Char('Y') | KeyCode::Char('y') => 21,
+                KeyCode::Char('U') | KeyCode::Char('u') => 22,
+                KeyCode::Char('I') | KeyCode::Char('i') => 23,
+                KeyCode::Char('O') | KeyCode::Char('o') => 24,
+                KeyCode::Char('P') | KeyCode::Char('p') => 25,
+                KeyCode::Char('[') => 26,
+                KeyCode::Char(']') => 27,
+                KeyCode::Enter => 28,
+                KeyCode::Char('A') | KeyCode::Char('a') => 30,
+                KeyCode::Char('S') | KeyCode::Char('s') => 31,
+                KeyCode::Char('D') | KeyCode::Char('d') => 32,
+                KeyCode::Char('F') | KeyCode::Char('f') => 33,
+                KeyCode::Char('G') | KeyCode::Char('g') => 34,
+                KeyCode::Char('H') | KeyCode::Char('h') => 35,
+                KeyCode::Char('J') | KeyCode::Char('j') => 36,
+                KeyCode::Char('K') | KeyCode::Char('k') => 37,
+                KeyCode::Char('L') | KeyCode::Char('l') => 38,
+                KeyCode::Char(';') => 39,
+                KeyCode::Char('\'') => 40,
+                KeyCode::Char('`') => 41,
+                KeyCode::Char('\\') => 42,
+                KeyCode::Char('Z') | KeyCode::Char('z') => 44,
+                KeyCode::Char('X') | KeyCode::Char('x') => 45,
+                KeyCode::Char('C') | KeyCode::Char('c') => 46,
+                KeyCode::Char('V') | KeyCode::Char('v') => 47,
+                KeyCode::Char('B') | KeyCode::Char('b') => 48,
+                KeyCode::Char('N') | KeyCode::Char('n') => 49,
+                KeyCode::Char('M') | KeyCode::Char('m') => 50,
+                KeyCode::Char(',') => 51,
+                KeyCode::Char('.') => 52,
+                KeyCode::Char('/') => 53,
+                KeyCode::Char(' ') => 57,
+                KeyCode::F(n) => 58 + n as u32,
+                KeyCode::NumLock => 69,
+                KeyCode::CapsLock => 70,
+                c => todo!("unsupported key: {c:?}"),
             };
-            code.into()
+            (code + 8).into()
         }
 
         fn state(&self) -> input::KeyState {
