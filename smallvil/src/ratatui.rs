@@ -159,6 +159,7 @@ pub fn init_ratatui(
                                 InputEvent::PointerAxis { event: event.into() }
                             }
                         };
+                        eprintln!("event: {event:?}");
                         state.process_input_event::<RatatuiInputBackend>(event);
                     }
                     _ => {}

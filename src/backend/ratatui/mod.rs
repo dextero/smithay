@@ -193,8 +193,9 @@ mod input {
     use std::time::Instant;
 
     use crossterm::event::{KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+    use xkbcommon::xkb::keysyms;
 
-    use crate::backend::input;
+    use crate::backend::input::{self, KeyboardKeyEvent};
 
     /// TODO doc
     #[derive(Debug)]
@@ -269,10 +270,12 @@ mod input {
 
     impl From<crossterm::event::KeyEvent> for KeyEvent {
         fn from(event: crossterm::event::KeyEvent) -> Self {
-            Self {
+            let ret = Self {
                 time: Instant::now(),
                 event,
-            }
+            };
+            eprintln!("key event: code {:?}, state {:?}, count {:?}", ret.key_code(), ret.state(), ret.count());
+            ret
         }
     }
 
@@ -288,48 +291,43 @@ mod input {
 
     impl input::KeyboardKeyEvent<Backend> for KeyEvent {
         fn key_code(&self) -> xkbcommon::xkb::Keycode {
-            let code: u32 = match self.event.code {
-                KeyCode::Char(c) if ('A'..='Z').contains(&c) => 4 + (c as u32 - b'A' as u32),
-                KeyCode::Char(c) if ('a'..='z').contains(&c) => 4 + (c as u32 - b'a' as u32),
-                KeyCode::Char(c) if ('1'..='9').contains(&c) => 30 + (c as u32 - b'1' as u32),
-                KeyCode::Char('0') => 39,
-                KeyCode::Enter => 40,
-                KeyCode::Esc => 41,
-                KeyCode::Backspace => 42,
-                KeyCode::Tab => 43,
-                KeyCode::Char(' ') => 44,
-                KeyCode::Char('-') => 45,
-                KeyCode::Char('=') => 46,
-                KeyCode::Char('[') => 47,
-                KeyCode::Char(']') => 48,
-                KeyCode::Char('\\') => 49,
-                KeyCode::Char(';') => 51,
-                KeyCode::Char('\'') => 52,
-                KeyCode::Char('`') => 53,
-                KeyCode::Char(',') => 54,
-                KeyCode::Char('.') => 55,
-                KeyCode::Char('/') => 56,
-                KeyCode::CapsLock => 57,
-                KeyCode::F(n) if (1..=12).contains(&n) => 57 + n as u32,
-                KeyCode::PrintScreen => 70,
-                KeyCode::ScrollLock => 71,
-                KeyCode::Pause => 72,
-                KeyCode::Insert => 73,
-                KeyCode::Home => 74,
-                KeyCode::PageUp => 75,
-                KeyCode::Delete => 76,
-                KeyCode::End => 77,
-                KeyCode::PageDown => 78,
-                KeyCode::Right => 79,
-                KeyCode::Left => 80,
-                KeyCode::Down => 81,
-                KeyCode::Up => 82,
-                KeyCode::NumLock => 83,
-                _ =>
-                /* duuno, handle as esc? */
-                {
-                    41
-                }
+            let code: u32 = 8 + match self.event.code {
+                KeyCode::Char(c) if ('A'..='Z').contains(&c) => (c as u32 - 'A' as u32) + keysyms::KEY_A,
+                KeyCode::Char(c) if ('a'..='z').contains(&c) => (c as u32 - 'a' as u32) + keysyms::KEY_a,
+                KeyCode::Char(c) if ('0'..='9').contains(&c) => (c as u32 - '0' as u32) + keysyms::KEY_0,
+                KeyCode::Enter => keysyms::KEY_Return,
+                KeyCode::Esc => keysyms::KEY_Escape,
+                KeyCode::Backspace => keysyms::KEY_BackSpace,
+                KeyCode::Tab => keysyms::KEY_Tab,
+                KeyCode::Char(' ') => keysyms::KEY_space,
+                KeyCode::Char('-') => keysyms::KEY_minus,
+                KeyCode::Char('=') => keysyms::KEY_equal,
+                KeyCode::Char('[') => keysyms::KEY_bracketleft,
+                KeyCode::Char(']') => keysyms::KEY_bracketright,
+                KeyCode::Char('\\') => keysyms::KEY_backslash,
+                KeyCode::Char(';') => keysyms::KEY_semicolon,
+                KeyCode::Char('\'') => keysyms::KEY_apostrophe,
+                KeyCode::Char('`') => keysyms::KEY_grave,
+                KeyCode::Char(',') => keysyms::KEY_comma,
+                KeyCode::Char('.') => keysyms::KEY_period,
+                KeyCode::Char('/') => keysyms::KEY_slash,
+                KeyCode::CapsLock => keysyms::KEY_Caps_Lock,
+                KeyCode::F(n) if (1..=12).contains(&n) => keysyms::KEY_F1 + (n - 1) as u32,
+                KeyCode::PrintScreen => keysyms::KEY_Print,
+                KeyCode::ScrollLock => keysyms::KEY_Scroll_Lock,
+                KeyCode::Pause => keysyms::KEY_Pause,
+                KeyCode::Insert => keysyms::KEY_Insert,
+                KeyCode::Home => keysyms::KEY_Home,
+                KeyCode::PageUp => keysyms::KEY_Page_Up,
+                KeyCode::Delete => keysyms::KEY_Delete,
+                KeyCode::End => keysyms::KEY_End,
+                KeyCode::PageDown => keysyms::KEY_Page_Down,
+                KeyCode::Right => keysyms::KEY_Right,
+                KeyCode::Left => keysyms::KEY_Left,
+                KeyCode::Down => keysyms::KEY_Down,
+                KeyCode::Up => keysyms::KEY_Up,
+                KeyCode::NumLock => keysyms::KEY_Num_Lock,
+                _ => keysyms::KEY_Escape // dunno, handle as esc TODO
             };
             code.into()
         }
