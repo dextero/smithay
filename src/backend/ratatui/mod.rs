@@ -416,19 +416,19 @@ mod input {
 
     impl input::AbsolutePositionEvent<Backend> for MouseEvent {
         fn x(&self) -> f64 {
-            self.event.column as f64 / self.window_size.w as f64
+            self.event.column as _
         }
 
         fn y(&self) -> f64 {
-            self.event.row as f64 / self.window_size.h as f64
+            self.event.row as _
         }
 
         fn x_transformed(&self, width: i32) -> f64 {
-            self.x() * width as f64
+            self.x() / self.window_size.w as f64 * width as f64
         }
 
         fn y_transformed(&self, height: i32) -> f64 {
-            self.y() * height as f64
+            self.y() / self.window_size.h as f64 * height as f64
         }
     }
 
