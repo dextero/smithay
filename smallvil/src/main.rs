@@ -39,7 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_handle,
     };
 
-    crate::ratatui::init_ratatui(&mut event_loop, &mut data)?;
+    if std::env::var("BACKEND").map(|s| s == "winit").unwrap_or(false) {
+        crate::winit::init_winit(&mut event_loop, &mut data)?;
+    } else {
+        crate::ratatui::init_ratatui(&mut event_loop, &mut data)?;
+    }
 
     let mut args = std::env::args().skip(1);
     let flag = args.next();
