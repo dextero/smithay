@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyModifiers, KeyEventKind};
 use smithay::{
     backend::{
         input::InputEvent,
-        ratatui::{self, RatatuiEvent, RatatuiInputBackend},
+        ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
         renderer::{
             damage::OutputDamageTracker,
             element::surface::WaylandSurfaceRenderElement,
@@ -143,20 +143,21 @@ pub fn init_ratatui(
                         state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard { event: event.into() });
                     }
                     RatatuiEvent::Mouse(event) => {
+                        let e = RatatuiMouseEvent::new(event, backend.window_size());
                         let event = match event.kind {
                             crossterm::event::MouseEventKind::Down(_)
                             | crossterm::event::MouseEventKind::Up(_) => {
-                                InputEvent::PointerButton { event: event.into() }
+                                InputEvent::PointerButton { event: e }
                             }
                             crossterm::event::MouseEventKind::Drag(_)
                             | crossterm::event::MouseEventKind::Moved => {
-                                InputEvent::PointerMotionAbsolute { event: event.into() }
+                                InputEvent::PointerMotionAbsolute { event: e }
                             }
                             crossterm::event::MouseEventKind::ScrollDown
                             | crossterm::event::MouseEventKind::ScrollUp
                             | crossterm::event::MouseEventKind::ScrollLeft
                             | crossterm::event::MouseEventKind::ScrollRight => {
-                                InputEvent::PointerAxis { event: event.into() }
+                                InputEvent::PointerAxis { event: e }
                             }
                         };
                         eprintln!("event: {event:?}");

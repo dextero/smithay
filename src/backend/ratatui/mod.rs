@@ -194,7 +194,7 @@ mod input {
 
     use crossterm::event::{KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 
-    use crate::backend::input::{self, KeyboardKeyEvent};
+    use crate::{backend::input::{self, KeyboardKeyEvent}, utils::Size};
 
     /// TODO doc
     #[derive(Debug)]
@@ -207,7 +207,7 @@ mod input {
 
         type PointerAxisEvent = MouseEvent;
         type PointerButtonEvent = MouseEvent;
-        type PointerMotionEvent = MouseEvent;
+        type PointerMotionEvent = input::UnusedEvent;
         type PointerMotionAbsoluteEvent = MouseEvent;
 
         type GestureSwipeBeginEvent = input::UnusedEvent;
@@ -372,13 +372,16 @@ mod input {
     pub struct MouseEvent {
         time: Instant,
         event: crossterm::event::MouseEvent,
+        window_size: Size<i32, crate::utils::Physical>,
     }
 
-    impl From<crossterm::event::MouseEvent> for MouseEvent {
-        fn from(event: crossterm::event::MouseEvent) -> Self {
+    impl MouseEvent {
+        pub fn new(event: crossterm::event::MouseEvent,
+               window_size: Size<i32, crate::utils::Physical>) -> Self {
             Self {
                 time: Instant::now(),
                 event,
+                window_size,
             }
         }
     }
@@ -411,39 +414,21 @@ mod input {
         }
     }
 
-    impl input::PointerMotionEvent<Backend> for MouseEvent {
-        fn delta_x(&self) -> f64 {
-            0.0f64
-        }
-
-        fn delta_y(&self) -> f64 {
-            0.0f64
-        }
-
-        fn delta_x_unaccel(&self) -> f64 {
-            0.0f64
-        }
-
-        fn delta_y_unaccel(&self) -> f64 {
-            0.0f64
-        }
-    }
-
     impl input::AbsolutePositionEvent<Backend> for MouseEvent {
         fn x(&self) -> f64 {
-            self.event.column as _
+            self.event.column as f64 / self.window_size.w as f64
         }
 
         fn y(&self) -> f64 {
-            self.event.row as _
+            self.event.row as f64 / self.window_size.h as f64
         }
 
-        fn x_transformed(&self, _width: i32) -> f64 {
-            0.0f64
+        fn x_transformed(&self, width: i32) -> f64 {
+            self.x() * width as f64
         }
 
-        fn y_transformed(&self, _height: i32) -> f64 {
-            0.0f64
+        fn y_transformed(&self, height: i32) -> f64 {
+            self.y() * height as f64
         }
     }
 
@@ -481,3 +466,5 @@ mod input {
 }
 
 pub use input::Backend as RatatuiInputBackend;
+pub use input::KeyEvent as RatatuiKeyEvent;
+pub use input::MouseEvent as RatatuiMouseEvent;
