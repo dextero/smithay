@@ -376,8 +376,10 @@ mod input {
     }
 
     impl MouseEvent {
-        pub fn new(event: crossterm::event::MouseEvent,
-               window_size: Size<i32, crate::utils::Physical>) -> Self {
+        /// TODO: doc
+        pub fn new(mut event: crossterm::event::MouseEvent,
+                   window_size: Size<i32, crate::utils::Physical>) -> Self {
+            event.row *= 2;
             Self {
                 time: Instant::now(),
                 event,

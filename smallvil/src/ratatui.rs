@@ -53,13 +53,13 @@ pub fn init_ratatui(
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    let size = backend.renderer().window_size();
-    eprintln!("window size: {size:?}");
+    let term_size = backend.renderer().terminal_size();
+    eprintln!("window size: {term_size:?}");
     let mut framebuffer = Some(RatatuiTexture::from(Buffer::empty(Rect::new(
         0,
         0,
-        u16::try_from(size.w).unwrap(),
-        u16::try_from(size.h).unwrap(),
+        term_size.width,
+        term_size.height,
     ))));
 
     let mut frames = 0;
@@ -120,10 +120,10 @@ pub fn init_ratatui(
                         state.popups.cleanup();
                         let _ = display.flush_clients();
                     }
-                    RatatuiEvent::Resize(width, height) => {
+                    RatatuiEvent::Resize(_, _) => {
                         output.change_current_state(
                             Some(Mode {
-                                size: Size::new(width.into(), height.into()),
+                                size: backend.renderer().window_size(),
                                 refresh: 60_000,
                             }),
                             None,
