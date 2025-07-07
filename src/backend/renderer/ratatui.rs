@@ -5,12 +5,10 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crossterm::ExecutableCommand;
-use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::style::Color;
 use ratatui::Terminal;
-use tracing::warn;
 
 use crate::backend::allocator::dmabuf::DmabufMappingMode;
 use crate::backend::allocator::{Buffer, Fourcc};
@@ -58,20 +56,23 @@ impl RatatuiRenderer {
     }
 
     /// TODO
-    pub fn swap_buffers(&mut self, tex: RatatuiTexture) -> Result<RatatuiTexture, RatatuiError> {
-        {
-            let mut tex = tex.buffer.lock().unwrap();
-            let expected_size = self.terminal_size();
-            let actual_size = tex.area().as_size();
-            if expected_size != actual_size {
-                return Err(RatatuiError::InvalidTextureSize {
-                    actual: actual_size,
-                    expected: expected_size,
-                });
-            }
-            std::mem::swap(self.terminal.current_buffer_mut(), &mut tex);
+    pub fn swap_buffers(&mut self, mut fb: RatatuiFramebuffer) -> Result<RatatuiFramebuffer, RatatuiError> {
+        let expected_size = self.terminal_size();
+        let actual_size = fb.buffer.area.as_size();
+        if expected_size != actual_size {
+            // window resized
+            return Ok(self.new_framebuffer());
         }
-        Ok(tex)
+        std::mem::swap(self.terminal.current_buffer_mut(), &mut fb.buffer);
+        self.terminal.flush()?;
+        Ok(fb)
+    }
+
+    /// TODO: docs
+    pub fn new_framebuffer(&self) -> RatatuiFramebuffer {
+        let size = self.terminal_size();
+        let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, size.width, size.height));
+        RatatuiFramebuffer { buffer }
     }
 }
 
@@ -82,10 +83,44 @@ impl Drop for RatatuiRenderer {
     }
 }
 
+/// TODO: docs
+#[derive(Debug)]
+pub struct RatatuiFramebuffer {
+    buffer: ratatui::buffer::Buffer,
+}
+
+impl RatatuiFramebuffer {
+    fn is_compatible_with(&self, renderer: &RatatuiRenderer) -> bool {
+        let expected_size = renderer.terminal_size();
+        let actual_size = self.buffer.area.as_size();
+        expected_size == actual_size
+    }
+}
+
+impl Texture for RatatuiFramebuffer {
+    fn width(&self) -> u32 {
+        u32::from(self.buffer.area().width)
+    }
+
+    fn height(&self) -> u32 {
+        u32::from(self.buffer.area().height)
+    }
+
+    fn format(&self) -> Option<Fourcc> {
+        Some(Fourcc::Argb8888)
+    }
+}
+
+fn pixels_into_argb8888<const F: u32>(ptr: *const u8, size: usize) -> Vec<PixelArgb8888> {
+    assert!(size % 4 == 0);
+    let slice: &[Pixel<F>] = unsafe { std::slice::from_raw_parts(ptr as *const Pixel<F>, size / 4) };
+    slice.iter().map(IntoArgb8888::into_argb8888).collect()
+}
+
 impl ImportMemWl for RatatuiRenderer {
-    fn import_shm_buffer(
+    fn import_shm_buffer<'buf>(
         &mut self,
-        buffer: &wayland_server::protocol::wl_buffer::WlBuffer,
+        buffer: &'buf wayland_server::protocol::wl_buffer::WlBuffer,
         _surface: Option<&crate::wayland::compositor::SurfaceData>,
         _damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
@@ -93,43 +128,31 @@ impl ImportMemWl for RatatuiRenderer {
             let size = Size::new(data.width.try_into().unwrap(), data.height.try_into().unwrap());
             let fourcc = shm_format_to_fourcc(data.format)
                 .ok_or(RatatuiError::UnsupportedWlPixelFormat(data.format))?;
-            let buf = match fourcc {
-                Fourcc::Argb8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Argb8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Xrgb8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Xrgb8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Rgba8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Rgba8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Rgbx8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Rgbx8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Abgr8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Abgr8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Xbgr8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Xbgr8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Bgra8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Bgra8888 as _ }>(ptr as *const _, len, size)
-                }
-                Fourcc::Bgrx8888 => {
-                    buffer_from_ptr_len::<{ Fourcc::Bgrx8888 as _ }>(ptr as *const _, len, size)
-                }
+
+            let pixels = match fourcc {
+                Fourcc::Argb8888 => pixels_into_argb8888::<{ Fourcc::Argb8888 as u32 }>(ptr, len),
+                Fourcc::Xrgb8888 => pixels_into_argb8888::<{ Fourcc::Xrgb8888 as u32 }>(ptr, len),
+                Fourcc::Rgba8888 => pixels_into_argb8888::<{ Fourcc::Rgba8888 as u32 }>(ptr, len),
+                Fourcc::Rgbx8888 => pixels_into_argb8888::<{ Fourcc::Rgbx8888 as u32 }>(ptr, len),
+                Fourcc::Abgr8888 => pixels_into_argb8888::<{ Fourcc::Abgr8888 as u32 }>(ptr, len),
+                Fourcc::Xbgr8888 => pixels_into_argb8888::<{ Fourcc::Xbgr8888 as u32 }>(ptr, len),
+                Fourcc::Bgra8888 => pixels_into_argb8888::<{ Fourcc::Bgra8888 as u32 }>(ptr, len),
+                Fourcc::Bgrx8888 => pixels_into_argb8888::<{ Fourcc::Bgrx8888 as u32 }>(ptr, len),
                 f => todo!("unsupported format: {f:?}"),
             };
-            Ok(RatatuiTexture::from(buf))
+            let tex = RatatuiTexture { pixels, size };
+            Ok(tex.into())
         })?
     }
 }
 
 impl ImportDmaWl for RatatuiRenderer {}
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 struct Pixel<const F: u32>(u32);
+
+type PixelArgb8888 = Pixel<{ Fourcc::Argb8888 as u32 }>;
 
 impl<const F: u32> Pixel<F> {
     fn r(&self) -> u8 {
@@ -176,50 +199,48 @@ impl<const F: u32> Pixel<F> {
             Err(e) => todo!("invalid format: {e:?}"),
         }
     }
-}
 
-impl<const F: u32> Into<Cell> for &Pixel<F> {
-    fn into(self) -> Cell {
-        let mut cell = Cell::new(" ");
-        cell.set_bg(Color::Rgb(self.r(), self.g(), self.b()));
-        cell
+    fn a(&self) -> u8 {
+        match Fourcc::try_from(F) {
+            Ok(Fourcc::Argb8888) => (self.0 >> 24) as u8,
+            Ok(Fourcc::Xrgb8888) => u8::MAX,
+            Ok(Fourcc::Rgba8888) => (self.0 >> 0) as u8,
+            Ok(Fourcc::Rgbx8888) => u8::MAX,
+            Ok(Fourcc::Abgr8888) => (self.0 >> 24) as u8,
+            Ok(Fourcc::Xbgr8888) => u8::MAX,
+            Ok(Fourcc::Bgra8888) => (self.0 >> 0) as u8,
+            Ok(Fourcc::Bgrx8888) => u8::MAX,
+            Ok(f) => todo!("unsupported format: {f:?}"),
+            Err(e) => todo!("invalid format: {e:?}"),
+        }
     }
 }
 
-fn buffer_from_pixels<const F: u32>(
-    pixels: &[Pixel<F>],
-    size: Size<u32, Physical>,
-) -> ratatui::buffer::Buffer {
-    let mut buf = ratatui::buffer::Buffer::empty(Rect::new(
-        0,
-        0,
-        size.w.try_into().unwrap(),
-        size.h.try_into().unwrap(),
-    ));
-    pixels
-        .iter()
-        .zip(buf.content.iter_mut())
-        .for_each(|(pixel, cell)| {
-            *cell = pixel.into();
-        });
-    buf
+trait IntoArgb8888 {
+    fn into_argb8888(self) -> PixelArgb8888;
 }
 
-fn buffer_from_ptr_len<const F: u32>(
-    ptr: *const Pixel<F>,
-    len_pixels: usize,
-    size: Size<u32, Physical>,
-) -> ratatui::buffer::Buffer {
-    // SAFETY: TODO
-    let pixels: &[Pixel<F>] = unsafe { std::slice::from_raw_parts(ptr, len_pixels) };
-    buffer_from_pixels(pixels, size)
+impl<const F: u32> IntoArgb8888 for &Pixel<F> {
+    fn into_argb8888(self) -> PixelArgb8888 {
+        (*self).into_argb8888()
+    }
 }
 
-fn buffer_from_mapping<const F: u32>(
-    map: &crate::backend::allocator::dmabuf::DmabufMapping,
-    size: Size<u32, Physical>,
-) -> ratatui::buffer::Buffer {
-    buffer_from_ptr_len::<F>(map.ptr() as *const _, map.length() / 4, size)
+impl<const F: u32> IntoArgb8888 for Pixel<F> {
+    fn into_argb8888(self) -> PixelArgb8888 {
+        Pixel::<{ Fourcc::Argb8888 as u32 }>(
+            u32::from(self.a()) << 24
+                | u32::from(self.r()) << 16
+                | u32::from(self.g()) << 8
+                | u32::from(self.b()) << 0,
+        )
+    }
+}
+
+impl<const F: u32> Into<Color> for Pixel<F> {
+    fn into(self) -> Color {
+        Color::Rgb(self.r(), self.g(), self.b())
+    }
 }
 
 impl ImportDma for RatatuiRenderer {
@@ -230,18 +251,21 @@ impl ImportDma for RatatuiRenderer {
     ) -> Result<Self::TextureId, Self::Error> {
         let size = Size::new(dmabuf.width().into(), dmabuf.height().into());
         let map = dmabuf.map_plane(0, DmabufMappingMode::READ).unwrap();
-        let buf = match dmabuf.format().code {
-            Fourcc::Argb8888 => buffer_from_mapping::<{ Fourcc::Argb8888 as _ }>(&map, size),
-            Fourcc::Xrgb8888 => buffer_from_mapping::<{ Fourcc::Xrgb8888 as _ }>(&map, size),
-            Fourcc::Rgba8888 => buffer_from_mapping::<{ Fourcc::Rgba8888 as _ }>(&map, size),
-            Fourcc::Rgbx8888 => buffer_from_mapping::<{ Fourcc::Rgbx8888 as _ }>(&map, size),
-            Fourcc::Abgr8888 => buffer_from_mapping::<{ Fourcc::Abgr8888 as _ }>(&map, size),
-            Fourcc::Xbgr8888 => buffer_from_mapping::<{ Fourcc::Xbgr8888 as _ }>(&map, size),
-            Fourcc::Bgra8888 => buffer_from_mapping::<{ Fourcc::Bgra8888 as _ }>(&map, size),
-            Fourcc::Bgrx8888 => buffer_from_mapping::<{ Fourcc::Bgrx8888 as _ }>(&map, size),
+        let ptr = map.ptr() as *const u8;
+        let len = map.length();
+        let pixels = match dmabuf.format().code {
+            Fourcc::Argb8888 => pixels_into_argb8888::<{ Fourcc::Argb8888 as u32 }>(ptr, len),
+            Fourcc::Xrgb8888 => pixels_into_argb8888::<{ Fourcc::Xrgb8888 as u32 }>(ptr, len),
+            Fourcc::Rgba8888 => pixels_into_argb8888::<{ Fourcc::Rgba8888 as u32 }>(ptr, len),
+            Fourcc::Rgbx8888 => pixels_into_argb8888::<{ Fourcc::Rgbx8888 as u32 }>(ptr, len),
+            Fourcc::Abgr8888 => pixels_into_argb8888::<{ Fourcc::Abgr8888 as u32 }>(ptr, len),
+            Fourcc::Xbgr8888 => pixels_into_argb8888::<{ Fourcc::Xbgr8888 as u32 }>(ptr, len),
+            Fourcc::Bgra8888 => pixels_into_argb8888::<{ Fourcc::Bgra8888 as u32 }>(ptr, len),
+            Fourcc::Bgrx8888 => pixels_into_argb8888::<{ Fourcc::Bgrx8888 as u32 }>(ptr, len),
             f => todo!("unsupported format: {f:?}"),
         };
-        Ok(RatatuiTexture::from(buf))
+        let tex = RatatuiTexture { pixels, size };
+        Ok(tex.into())
     }
 }
 
@@ -253,7 +277,7 @@ impl ImportDma for RatatuiRenderer {
 impl ImportEgl for RatatuiRenderer {
     fn bind_wl_display(
         &mut self,
-        display: &wayland_server::DisplayHandle,
+        _display: &wayland_server::DisplayHandle,
     ) -> Result<(), crate::backend::egl::Error> {
         todo!()
     }
@@ -268,9 +292,9 @@ impl ImportEgl for RatatuiRenderer {
 
     fn import_egl_buffer(
         &mut self,
-        buffer: &wayland_server::protocol::wl_buffer::WlBuffer,
-        surface: Option<&crate::wayland::compositor::SurfaceData>,
-        damage: &[Rectangle<i32, BufferCoord>],
+        _buffer: &wayland_server::protocol::wl_buffer::WlBuffer,
+        _surface: Option<&crate::wayland::compositor::SurfaceData>,
+        _damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
         todo!()
     }
@@ -287,7 +311,17 @@ pub struct CompositorWidgetState;
 /// A texture for the ratatui renderer
 #[derive(Debug, Clone)]
 pub struct RatatuiTexture {
-    buffer: Arc<Mutex<ratatui::buffer::Buffer>>,
+    pixels: Vec<PixelArgb8888>,
+    size: Size<u32, Physical>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RatatuiTextureHandle(Arc<Mutex<RatatuiTexture>>);
+
+impl From<RatatuiTexture> for RatatuiTextureHandle {
+    fn from(value: RatatuiTexture) -> Self {
+        Self(Arc::new(Mutex::new(value)))
+    }
 }
 
 /// TODO: docs
@@ -299,45 +333,44 @@ pub enum RatatuiError {
     /// TODO: docs
     #[error("Texture size {}x{} does not match terminal size {}x{}", actual.width, actual.height, expected.width, expected.height)]
     InvalidTextureSize {
+        /// TODO: docs
         actual: ratatui::layout::Size,
+        /// TODO: docs
         expected: ratatui::layout::Size,
     },
+    /// TODO: docs
     #[error("Unsupported pixel format: {0:?}")]
     UnsupportedWlPixelFormat(wayland_server::protocol::wl_shm::Format),
+    /// TODO: docs
     #[error("Buffer access error: {0:?}")]
     BufferAccessError(#[from] crate::wayland::shm::BufferAccessError),
+    /// TODO: docs
+    #[error("IO error: {0:?}")]
+    IoError(#[from] std::io::Error),
 }
 
 impl RatatuiTexture {
-    fn get_pixel(&self, x: f32, y: f32) -> Color {
-        let buf = self.buffer.lock().unwrap();
-        let x = x * buf.area.width as f32;
-        let y = y * buf.area.height as f32;
-        let x = u16::try_from(x.round().clamp(0f32, buf.area.width as f32 - 1f32) as i64).unwrap();
-        let y = u16::try_from(y.round().clamp(0f32, buf.area.height as f32 - 1f32) as i64).unwrap();
-        buf.cell((x, y)).unwrap().bg
+    fn get_pixel(&self, x: f32, y: f32) -> PixelArgb8888 {
+        let x = x * self.size.w as f32;
+        let y = y * self.size.h as f32;
+        let x = u16::try_from(x.round().clamp(0f32, self.size.w as f32 - 1f32) as i64).unwrap();
+        let y = u16::try_from(y.round().clamp(0f32, self.size.h as f32 - 1f32) as i64).unwrap();
+        let idx = y as usize * self.size.w as usize + x as usize;
+        *self.pixels.get(idx).unwrap()
     }
 }
 
-impl From<ratatui::buffer::Buffer> for RatatuiTexture {
-    fn from(value: ratatui::buffer::Buffer) -> Self {
-        Self {
-            buffer: Arc::new(Mutex::new(value)),
-        }
-    }
-}
-
-impl Texture for RatatuiTexture {
+impl Texture for RatatuiTextureHandle {
     fn width(&self) -> u32 {
-        self.buffer.lock().unwrap().area.width.into()
+        u32::try_from(self.0.lock().unwrap().size.w).unwrap()
     }
 
     fn height(&self) -> u32 {
-        self.buffer.lock().unwrap().area.height.into()
+        u32::try_from(self.0.lock().unwrap().size.h).unwrap()
     }
 
     fn format(&self) -> Option<Fourcc> {
-        Some(Fourcc::Xrgb8888)
+        Some(Fourcc::Argb8888)
     }
 }
 
@@ -356,9 +389,25 @@ fn color_to_ratatui(color: Color32F) -> Color {
     )
 }
 
-impl RatatuiFrame<'_, '_> {
+impl<'frame> RatatuiFrame<'frame, '_> {
+    fn new(renderer: &'frame mut RatatuiRenderer, framebuffer: &'frame mut RatatuiFramebuffer) -> Self {
+        if !framebuffer.is_compatible_with(renderer) {
+            tracing::warn!(
+                "window resized? fb {:?}, terminal {:?}; creating new framebuffer",
+                framebuffer.buffer.area.as_size(),
+                renderer.terminal_size()
+            );
+            *framebuffer = renderer.new_framebuffer();
+        }
+
+        Self {
+            renderer,
+            framebuffer,
+        }
+    }
+
     fn fill_rect(&mut self, rect: &Rectangle<i32, Physical>, color: Color) {
-        let mut buf = self.framebuffer.buffer.lock().unwrap();
+        let buf = &mut self.framebuffer.buffer;
 
         let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
         let x_max = (rect.loc.x + rect.size.w).clamp(0, buf.area.width as i32);
@@ -374,12 +423,6 @@ impl RatatuiFrame<'_, '_> {
                 ));
                 if let Some(cell) = cell {
                     cell.set_bg(color);
-                } else {
-                    todo!(
-                        "WTF pos {x}, {y} is out of {}x{} bounds",
-                        buf.area.width,
-                        buf.area.height
-                    );
                 }
             }
         }
@@ -391,7 +434,7 @@ impl Drop for RatatuiFrame<'_, '_> {
         let _ = self.renderer.terminal.draw(|frame| {
             std::mem::swap(
                 &mut frame.buffer_mut().content,
-                &mut self.framebuffer.buffer.lock().unwrap().content,
+                &mut self.framebuffer.buffer.content,
             );
         });
     }
@@ -399,7 +442,7 @@ impl Drop for RatatuiFrame<'_, '_> {
 
 impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
     type Error = RatatuiError;
-    type TextureId = RatatuiTexture;
+    type TextureId = RatatuiTextureHandle;
 
     fn context_id(&self) -> ContextId<Self::TextureId> {
         ContextId(Arc::new(InnerContextId(0)), PhantomData)
@@ -416,7 +459,7 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
     fn draw_solid(
         &mut self,
         dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
+        _damage: &[Rectangle<i32, Physical>],
         color: Color32F,
     ) -> Result<(), Self::Error> {
         let color = color_to_ratatui(color);
@@ -439,13 +482,15 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
         texture: &Self::TextureId,
         _src: Rectangle<f64, BufferCoord>,
         _dst: Rectangle<i32, Physical>,
-        damage: &[Rectangle<i32, Physical>],
+        _damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
         _src_transform: Transform,
         _alpha: f32,
     ) -> Result<(), Self::Error> {
         // TODO src dst
-        let mut buf = self.framebuffer.buffer.lock().unwrap();
+        let texture = texture.0.lock().unwrap();
+        let buf = &mut self.framebuffer.buffer;
+
         let rect = _dst;
         //for rect in damage {
         let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
@@ -466,13 +511,7 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
                 let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row_min).unwrap()));
                 if let Some(cell) = cell {
                     cell.set_char('\u{2584}');
-                    cell.set_fg(color);
-                } else {
-                    todo!(
-                        "WTF pos {x}, {y} is out of {}x{} bounds",
-                        buf.area.width,
-                        buf.area.height
-                    );
+                    cell.set_fg(color.into());
                 }
             }
         }
@@ -485,19 +524,13 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
                 let xf = x as f32 / rect.size.w as f32;
                 let yf_top = y_top as f32 / rect.size.h as f32;
                 let yf_bottom = y_bottom as f32 / rect.size.h as f32;
-                let color_top = texture.get_pixel(xf, yf_top);
-                let color_bottom = texture.get_pixel(xf, yf_bottom);
+                let pixel_top = texture.get_pixel(xf, yf_top);
+                let pixel_bottom = texture.get_pixel(xf, yf_bottom);
                 let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()));
                 if let Some(cell) = cell {
                     cell.set_char('\u{2584}');
-                    cell.set_bg(color_top);
-                    cell.set_fg(color_bottom);
-                } else {
-                    todo!(
-                        "WTF pos {x}, {row} is out of {}x{} bounds",
-                        buf.area.width,
-                        buf.area.height
-                    );
+                    cell.set_bg(pixel_top.into());
+                    cell.set_fg(pixel_bottom.into());
                 }
             }
         }
@@ -508,18 +541,11 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
             for x in x_min..x_max {
                 let xf = x as f32 / rect.size.w as f32;
                 let yf = y as f32 / rect.size.h as f32;
-                let color = texture.get_pixel(xf, yf);
+                let pixel = texture.get_pixel(xf, yf);
                 let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y / 2).unwrap()));
                 if let Some(cell) = cell {
                     cell.set_char('\u{2584}');
-                    cell.set_bg(color);
-                } else {
-                    todo!(
-                        "WTF pos {x}, {} is out of {}x{} bounds",
-                        row_max - 1,
-                        buf.area.width,
-                        buf.area.height
-                    );
+                    cell.set_bg(pixel.into());
                 }
             }
         }
@@ -544,8 +570,8 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
 
 impl RendererSuper for RatatuiRenderer {
     type Error = RatatuiError;
-    type TextureId = RatatuiTexture;
-    type Framebuffer<'buffer> = RatatuiTexture;
+    type TextureId = RatatuiTextureHandle;
+    type Framebuffer<'buffer> = RatatuiFramebuffer;
     type Frame<'frame, 'buffer>
         = RatatuiFrame<'frame, 'buffer>
     where
@@ -584,10 +610,7 @@ impl Renderer for RatatuiRenderer {
     where
         'buffer: 'frame,
     {
-        Ok(RatatuiFrame {
-            renderer: self,
-            framebuffer,
-        })
+        Ok(RatatuiFrame::new(self, framebuffer))
     }
 
     fn wait(&mut self, _sync: &sync::SyncPoint) -> Result<(), Self::Error> {
@@ -607,11 +630,12 @@ impl crate::backend::renderer::ImportMem for RatatuiRenderer {
             return Err(RatatuiError::TextureTooBig((size.w, size.h)));
         };
 
-        let buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, w, h));
+        let tex = RatatuiTexture {
+            pixels: vec![Pixel::<{ Fourcc::Argb8888 as u32 }>(0); w as usize * h as usize],
+            size: Size::new(w.into(), h.into()),
+        };
 
-        Ok(RatatuiTexture {
-            buffer: Arc::new(Mutex::new(buf)),
-        })
+        Ok(tex.into())
     }
 
     fn update_memory(

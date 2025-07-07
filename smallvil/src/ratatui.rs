@@ -55,12 +55,7 @@ pub fn init_ratatui(
 
     let term_size = backend.renderer().terminal_size();
     eprintln!("window size: {term_size:?}");
-    let mut framebuffer = Some(RatatuiTexture::from(Buffer::empty(Rect::new(
-        0,
-        0,
-        term_size.width,
-        term_size.height,
-    ))));
+    let mut framebuffer = Some(backend.renderer().new_framebuffer());
 
     let mut frames = 0;
     let mut render_start = std::time::Instant::now();
@@ -100,12 +95,6 @@ pub fn init_ratatui(
                             Color32F::BLACK,
                         )
                         .unwrap();
-                        framebuffer = Some(
-                            backend
-                                .renderer()
-                                .swap_buffers(framebuffer.take().unwrap())
-                                .unwrap(),
-                        );
 
                         state.space.elements().for_each(|window| {
                             window.send_frame(
