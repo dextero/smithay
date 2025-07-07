@@ -71,12 +71,13 @@ pub fn init_ratatui(
 
                 match event {
                     RatatuiEvent::Redraw => {
-                        if frames == 0 {
+                        frames += 1;
+                        if frames >= 60 {
+                            let render_end = std::time::Instant::now();
+                            eprintln!("FPS = {}", frames as f64 / render_end.duration_since(render_start).as_secs_f64());
+                            frames = 0;
                             render_start = std::time::Instant::now();
                         }
-                        frames += 1;
-                        let render_end = std::time::Instant::now();
-                        eprintln!("FPS = {}", frames as f64 / render_end.duration_since(render_start).as_secs_f64());
 
                         smithay::desktop::space::render_output::<
                             _,
