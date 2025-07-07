@@ -154,14 +154,14 @@ impl EventSource for RatatuiEventSource {
             poll.register(&timer, Interest::READ, Mode::Level, timer_token)?;
         }
         self.timer = Some(timer);
-        tracing::info!("timer registered with token {timer_token:?}");
+        tracing::debug!("timer registered with token {timer_token:?}");
 
         let token = token_factory.token();
         // SAFETY: stdin stays valid for the entire process lifetime.
         unsafe {
             poll.register(std::io::stdin(), Interest::READ, Mode::Level, token)?;
         };
-        tracing::info!("stdin registered with token {token:?}");
+        tracing::debug!("stdin registered with token {token:?}");
         self.event_token = Some(token);
         Ok(())
     }
@@ -179,11 +179,11 @@ impl EventSource for RatatuiEventSource {
     fn unregister(&mut self, poll: &mut calloop::Poll) -> calloop::Result<()> {
         poll.unregister(std::io::stdin())?;
         self.event_token = None;
-        tracing::info!("stdin unregistered");
+        tracing::debug!("stdin unregistered");
 
         if let Some(timer) = self.timer.take() {
             poll.unregister(timer)?;
-            tracing::info!("timer unregistered");
+            tracing::debug!("timer unregistered");
         }
         Ok(())
     }
@@ -273,7 +273,7 @@ mod input {
                 time: Instant::now(),
                 event,
             };
-            eprintln!("key event: code {:?}, state {:?}, count {:?}", ret.key_code(), ret.state(), ret.count());
+            tracing::trace!("key event: code {:?}, state {:?}, count {:?}", ret.key_code(), ret.state(), ret.count());
             ret
         }
     }

@@ -17,7 +17,7 @@ use crate::backend::renderer::{
     sync, Color32F, ContextId, DebugFlags, Frame, ImportDma, ImportDmaWl, ImportMemWl, InnerContextId,
     Renderer, RendererSuper, Texture, TextureFilter,
 };
-use crate::utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform};
+use crate::utils::{Buffer as BufferCoord, Physical, Point, Rectangle, Size, Transform};
 
 #[cfg(all(
     feature = "wayland_frontend",
@@ -315,6 +315,7 @@ pub struct RatatuiTexture {
     size: Size<u32, Physical>,
 }
 
+/// TODO: doc
 #[derive(Clone, Debug)]
 pub struct RatatuiTextureHandle(Arc<Mutex<RatatuiTexture>>);
 
@@ -350,11 +351,9 @@ pub enum RatatuiError {
 }
 
 impl RatatuiTexture {
-    fn get_pixel(&self, x: f32, y: f32) -> PixelArgb8888 {
-        let x = x * self.size.w as f32;
-        let y = y * self.size.h as f32;
-        let x = u16::try_from(x.round().clamp(0f32, self.size.w as f32 - 1f32) as i64).unwrap();
-        let y = u16::try_from(y.round().clamp(0f32, self.size.h as f32 - 1f32) as i64).unwrap();
+    fn get_pixel(&self, p: Point<f64, BufferCoord>) -> PixelArgb8888 {
+        let x = u16::try_from(p.x.round().clamp(0f64, self.size.w as f64 - 1f64) as i64).unwrap();
+        let y = u16::try_from(p.y.round().clamp(0f64, self.size.h as f64 - 1f64) as i64).unwrap();
         let idx = y as usize * self.size.w as usize + x as usize;
         *self.pixels.get(idx).unwrap()
     }
@@ -480,7 +479,7 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
     fn render_texture_from_to(
         &mut self,
         texture: &Self::TextureId,
-        _src: Rectangle<f64, BufferCoord>,
+        src: Rectangle<f64, BufferCoord>,
         _dst: Rectangle<i32, Physical>,
         _damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
@@ -505,13 +504,11 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
             // first row
             let y = y_min;
             for x in x_min..x_max {
-                let xf = x as f32 / rect.size.w as f32;
-                let yf = y as f32 / rect.size.h as f32;
-                let color = texture.get_pixel(xf, yf);
+                let pixel = texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y as f64));
                 let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row_min).unwrap()));
                 if let Some(cell) = cell {
                     cell.set_char('\u{2584}');
-                    cell.set_fg(color.into());
+                    cell.set_fg(pixel.into());
                 }
             }
         }
@@ -521,11 +518,10 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
             let y_top = row * 2;
             let y_bottom = y_top + 1;
             for x in x_min..x_max {
-                let xf = x as f32 / rect.size.w as f32;
-                let yf_top = y_top as f32 / rect.size.h as f32;
-                let yf_bottom = y_bottom as f32 / rect.size.h as f32;
-                let pixel_top = texture.get_pixel(xf, yf_top);
-                let pixel_bottom = texture.get_pixel(xf, yf_bottom);
+                let pixel_top =
+                    texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y_top as f64));
+                let pixel_bottom =
+                    texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y_bottom as f64));
                 let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()));
                 if let Some(cell) = cell {
                     cell.set_char('\u{2584}');
@@ -539,9 +535,7 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
             // last row
             let y = y_max - 1;
             for x in x_min..x_max {
-                let xf = x as f32 / rect.size.w as f32;
-                let yf = y as f32 / rect.size.h as f32;
-                let pixel = texture.get_pixel(xf, yf);
+                let pixel = texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y as f64));
                 let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y / 2).unwrap()));
                 if let Some(cell) = cell {
                     cell.set_char('\u{2584}');

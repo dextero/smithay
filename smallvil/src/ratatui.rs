@@ -150,7 +150,7 @@ pub fn init_ratatui(
                                 InputEvent::PointerAxis { event: e }
                             }
                         };
-                        eprintln!("event: {event:?}");
+                        tracing::trace!("event: {event:?}");
                         state.process_input_event::<RatatuiInputBackend>(event);
                     }
                     _ => {}
