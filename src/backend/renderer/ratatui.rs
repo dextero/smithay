@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crossterm::ExecutableCommand;
+use indexmap::Equivalent;
 use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::style::Color;
@@ -147,6 +148,42 @@ impl ImportMemWl for RatatuiRenderer {
 }
 
 impl ImportDmaWl for RatatuiRenderer {}
+
+trait Blend {
+    fn blend_with<const F: u32>(&mut self, fg_pix: Option<Pixel<F>>, bg_pix: Option<Pixel<F>>, alpha: f32);
+}
+
+impl Blend for ratatui::buffer::Cell {
+    fn blend_with<const F: u32>(&mut self, fg_pix: Option<Pixel<F>>, bg_pix: Option<Pixel<F>>, alpha: f32) {
+        assert!(0f32 <= alpha && alpha <= 1f32);
+
+        fn blend(bg: (u8, u8, u8), fg: (u8, u8, u8), alpha: f32) -> Color {
+            let one_minus_alpha = 1f32 - alpha;
+            let r = (fg.0 as f32 * alpha + bg.0 as f32 * one_minus_alpha) as u8;
+            let g = (fg.1 as f32 * alpha + bg.1 as f32 * one_minus_alpha) as u8;
+            let b = (fg.2 as f32 * alpha + bg.2 as f32 * one_minus_alpha) as u8;
+            Color::Rgb(r, g, b)
+        }
+
+        match (self.fg, fg_pix) {
+            (Color::Rgb(r, g, b), Some(pix)) => {
+                let alpha = pix.a() as f32 / 255f32 * alpha;
+                self.fg = blend((r, g, b), (pix.r(), pix.g(), pix.b()), alpha);
+            }
+            (_, Some(pix)) => self.fg = pix.into(),
+            (_, None) => {},
+        }
+
+        match (self.bg, bg_pix) {
+            (Color::Rgb(r, g, b), Some(pix)) => {
+                let alpha = pix.a() as f32 / 255f32 * alpha;
+                self.bg = blend((r, g, b), (pix.r(), pix.g(), pix.b()), alpha);
+            }
+            (_, Some(pix)) => self.bg = pix.into(),
+            (_, None) => {},
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -481,69 +518,69 @@ impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
         texture: &Self::TextureId,
         src: Rectangle<f64, BufferCoord>,
         _dst: Rectangle<i32, Physical>,
-        _damage: &[Rectangle<i32, Physical>],
+        damage: &[Rectangle<i32, Physical>],
         _opaque_regions: &[Rectangle<i32, Physical>],
         _src_transform: Transform,
-        _alpha: f32,
+        alpha: f32,
     ) -> Result<(), Self::Error> {
         // TODO src dst
         let texture = texture.0.lock().unwrap();
         let buf = &mut self.framebuffer.buffer;
 
-        let rect = _dst;
-        //for rect in damage {
-        let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
-        let x_max = (rect.loc.x + rect.size.w).clamp(0, buf.area.width as i32);
-        let y_min = rect.loc.y.clamp(0, buf.area.height as i32 * 2);
-        let y_max = (rect.loc.y + rect.size.h).clamp(0, buf.area.height as i32 * 2);
+        for rect in damage {
+            let x_min = rect.loc.x.clamp(0, buf.area.width as i32);
+            let x_max = (rect.loc.x + rect.size.w).clamp(0, buf.area.width as i32);
+            let y_min = rect.loc.y.clamp(0, buf.area.height as i32 * 2);
+            let y_max = (rect.loc.y + rect.size.h).clamp(0, buf.area.height as i32 * 2);
 
-        let row_min = y_min / 2;
-        let row_max = (y_max + 1) / 2;
+            let row_min = y_min / 2;
+            let row_max = (y_max + 1) / 2;
 
-        if y_min % 2 != 0 {
-            // first row
-            let y = y_min;
-            for x in x_min..x_max {
-                let pixel = texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y as f64));
-                let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row_min).unwrap()));
-                if let Some(cell) = cell {
-                    cell.set_char('\u{2584}');
-                    cell.set_fg(pixel.into());
+            if y_min % 2 != 0 {
+                // first row
+                let y = y_min;
+                for x in x_min..x_max {
+                    let pixel =
+                        texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y as f64));
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row_min).unwrap()));
+                    if let Some(cell) = cell {
+                        cell.set_char('\u{2584}');
+                        cell.blend_with(Some(pixel), None, alpha);
+                    }
+                }
+            }
+
+            for row in row_min..row_max {
+                // middle
+                let y_top = row * 2;
+                let y_bottom = y_top + 1;
+                for x in x_min..x_max {
+                    let pixel_top =
+                        texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y_top as f64));
+                    let pixel_bottom = texture
+                        .get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y_bottom as f64));
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()));
+                    if let Some(cell) = cell {
+                        cell.set_char('\u{2584}');
+                        cell.blend_with(Some(pixel_bottom), Some(pixel_top), alpha);
+                    }
+                }
+            }
+
+            if y_max % 2 == 0 {
+                // last row
+                let y = y_max - 1;
+                for x in x_min..x_max {
+                    let pixel =
+                        texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y as f64));
+                    let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y / 2).unwrap()));
+                    if let Some(cell) = cell {
+                        cell.set_char('\u{2584}');
+                        cell.blend_with(None, Some(pixel), alpha);
+                    }
                 }
             }
         }
-
-        for row in row_min..row_max {
-            // middle
-            let y_top = row * 2;
-            let y_bottom = y_top + 1;
-            for x in x_min..x_max {
-                let pixel_top =
-                    texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y_top as f64));
-                let pixel_bottom =
-                    texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y_bottom as f64));
-                let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(row).unwrap()));
-                if let Some(cell) = cell {
-                    cell.set_char('\u{2584}');
-                    cell.set_bg(pixel_top.into());
-                    cell.set_fg(pixel_bottom.into());
-                }
-            }
-        }
-
-        if y_max % 2 == 0 {
-            // last row
-            let y = y_max - 1;
-            for x in x_min..x_max {
-                let pixel = texture.get_pixel(src.loc + Point::<f64, BufferCoord>::new(x as f64, y as f64));
-                let cell = buf.cell_mut((u16::try_from(x).unwrap(), u16::try_from(y / 2).unwrap()));
-                if let Some(cell) = cell {
-                    cell.set_char('\u{2584}');
-                    cell.set_bg(pixel.into());
-                }
-            }
-        }
-        //}
         Ok(())
     }
 
@@ -615,20 +652,31 @@ impl Renderer for RatatuiRenderer {
 impl crate::backend::renderer::ImportMem for RatatuiRenderer {
     fn import_memory(
         &mut self,
-        _data: &[u8],
-        _format: Fourcc,
+        data: &[u8],
+        format: Fourcc,
         size: Size<i32, BufferCoord>,
         _flipped: bool,
     ) -> Result<Self::TextureId, Self::Error> {
         let (Ok(w), Ok(h)) = (u16::try_from(size.w), u16::try_from(size.h)) else {
             return Err(RatatuiError::TextureTooBig((size.w, size.h)));
         };
+        let size = Size::new(w.into(), h.into());
 
-        let tex = RatatuiTexture {
-            pixels: vec![Pixel::<{ Fourcc::Argb8888 as u32 }>(0); w as usize * h as usize],
-            size: Size::new(w.into(), h.into()),
+        let ptr = data.as_ptr();
+        let len = data.len();
+        let pixels = match format {
+            Fourcc::Argb8888 => pixels_into_argb8888::<{ Fourcc::Argb8888 as u32 }>(ptr, len),
+            Fourcc::Xrgb8888 => pixels_into_argb8888::<{ Fourcc::Xrgb8888 as u32 }>(ptr, len),
+            Fourcc::Rgba8888 => pixels_into_argb8888::<{ Fourcc::Rgba8888 as u32 }>(ptr, len),
+            Fourcc::Rgbx8888 => pixels_into_argb8888::<{ Fourcc::Rgbx8888 as u32 }>(ptr, len),
+            Fourcc::Abgr8888 => pixels_into_argb8888::<{ Fourcc::Abgr8888 as u32 }>(ptr, len),
+            Fourcc::Xbgr8888 => pixels_into_argb8888::<{ Fourcc::Xbgr8888 as u32 }>(ptr, len),
+            Fourcc::Bgra8888 => pixels_into_argb8888::<{ Fourcc::Bgra8888 as u32 }>(ptr, len),
+            Fourcc::Bgrx8888 => pixels_into_argb8888::<{ Fourcc::Bgrx8888 as u32 }>(ptr, len),
+            f => todo!("unsupported format: {f:?}"),
         };
 
+        let tex = RatatuiTexture { pixels, size };
         Ok(tex.into())
     }
 
@@ -639,7 +687,7 @@ impl crate::backend::renderer::ImportMem for RatatuiRenderer {
         _region: Rectangle<i32, BufferCoord>,
     ) -> Result<(), Self::Error> {
         // TODO
-        Ok(())
+        todo!("ImportMem::update_memory")
     }
 
     fn mem_formats(&self) -> Box<dyn Iterator<Item = Fourcc>> {
