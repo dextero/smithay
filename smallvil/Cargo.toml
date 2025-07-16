@@ -8,12 +8,7 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 bitflags = "2.2.1"
 crossterm = "0.28.0"
 tracing = "0.1.41"
-
-[dependencies.ratatui]
-path = "../../ratatui/ratatui"
-
-[dependencies.ratatui-core]
-path = "../../ratatui/ratatui-core"
+ratatui = { version = "0.29.0", features = ["crossterm"] }
 
 [dependencies.smithay]
 path = "../"
