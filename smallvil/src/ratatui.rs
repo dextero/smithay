@@ -1,21 +1,18 @@
 use std::time::Duration;
 
-use ::ratatui::{buffer::Buffer, layout::Rect};
-use crossterm::event::{KeyCode, KeyModifiers, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use smithay::{
     backend::{
         input::InputEvent,
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
         renderer::{
-            damage::OutputDamageTracker,
-            element::surface::WaylandSurfaceRenderElement,
-            ratatui::{RatatuiRenderer, RatatuiTexture},
-            Color32F,
+            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
+            ratatui::RatatuiRenderer, Color32F,
         },
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Size, Transform},
+    utils::Transform,
 };
 
 use crate::{CalloopData, Smallvil};
@@ -64,7 +61,9 @@ pub fn init_ratatui(
     event_loop
         .handle()
         .insert_source(
-            backend.event_source(Duration::from_micros(1_000_000_000 / u64::try_from(mode.refresh).unwrap())),
+            backend.event_source(Duration::from_micros(
+                1_000_000_000 / u64::try_from(mode.refresh).unwrap(),
+            )),
             move |event, _, data| {
                 let display = &mut data.display_handle;
                 let state = &mut data.state;
@@ -74,7 +73,10 @@ pub fn init_ratatui(
                         frames += 1;
                         if frames >= 60 {
                             let render_end = std::time::Instant::now();
-                            eprintln!("FPS = {}", frames as f64 / render_end.duration_since(render_start).as_secs_f64());
+                            eprintln!(
+                                "FPS = {}",
+                                frames as f64 / render_end.duration_since(render_start).as_secs_f64()
+                            );
                             frames = 0;
                             render_start = std::time::Instant::now();
                         }
@@ -127,10 +129,14 @@ pub fn init_ratatui(
                             state.loop_signal.stop();
                         }
 
-                        state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard { event: event.clone().into() });
+                        state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
+                            event: event.into(),
+                        });
 
                         event.kind = KeyEventKind::Release;
-                        state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard { event: event.into() });
+                        state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
+                            event: event.into(),
+                        });
                     }
                     RatatuiEvent::Mouse(event) => {
                         let e = RatatuiMouseEvent::new(event, backend.window_size());
@@ -153,7 +159,6 @@ pub fn init_ratatui(
                         tracing::trace!("event: {event:?}");
                         state.process_input_event::<RatatuiInputBackend>(event);
                     }
-                    _ => {}
                 }
             },
         )
