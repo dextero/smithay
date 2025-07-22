@@ -245,3 +245,6 @@ harness = false
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+[profile.release]
+debug = true
