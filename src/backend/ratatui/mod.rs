@@ -268,7 +268,7 @@ impl KeyboardState {
         }
 
         match event.kind {
-            KeyEventKind::Press | KeyEventKind::Repeat => {
+            KeyEventKind::Press => {
                 self.keys_down.insert(event.code);
                 if let Some(code) = to_input_code(event.code) {
                     emit(code, event.kind);
@@ -277,6 +277,7 @@ impl KeyboardState {
                 }
             }
             KeyEventKind::Release => todo!("???? HOW ????"),
+            KeyEventKind::Repeat => { /* ignore */ }
         };
 
         events
