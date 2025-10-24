@@ -1,3 +1,49 @@
+# WARNING
+
+This form contains a bunch of *awful* hacks to make `smallvil/` a Wayland compositor that attempts to render to a terminal.
+
+## Wait what why
+
+Idk, it sounded funny in my head
+
+## Details
+
+* Ratatui + crossterm is used as the backend renderer.
+* All pixels are converted to series of U+2584 LOWER HALF BLOCK characters - each row of characters corresponds to 2 consecutive rows of pixels.
+* Display resolution is inferred from the terminal size.
+
+Jank:
+
+* Key release events are messed up. crossterm can only emit them when kitty terminal protocol is used.
+* Mouse coordinates can't handle resizing the window after startup.
+* IT'S SLOOOOOOOW
+* You can't stop it with Ctrl+C, only `kill` it from another terminal
+
+With that said, to try this mess out run:
+
+```
+cd smallvil && cargo run --release 2>/dev/null
+# shut down from another terminal
+killall smallvil
+```
+
+Note: works ~best~least bad with [alacritty](https://alacritty.org/) configured to use a font with 2x1 pixel sized characters:
+
+```
+# save to tiny-font.toml
+[window]
+# 1024x768px
+dimensions = { columns = 1024, lines = 384 }
+
+[font]
+normal = { family = "Nimbus Mono PS" }
+size = 1
+```
+
+```
+alacritty --config-file  ~/.config/alacritty/tiny-font.toml --command bash -c "cd $PWD && cargo run --release 2>/tmp/log"
+```
+
 <img align="right" width="25%" src="https://github.com/Smithay/smithay/assets/20758186/7a84ab10-e229-4823-bad8-9c647546407b">
 
 # Smithay
@@ -21,15 +67,14 @@ It supports the [core Wayland protocols](https://gitlab.freedesktop.org/wayland/
 
 Also:
 
-- **Documented:** Smithay strives to maintain a clear and detailed documentation of its API and its
+* **Documented:** Smithay strives to maintain a clear and detailed documentation of its API and its
   functionalities. Compiled documentations are available on [docs.rs](https://docs.rs/smithay) for released
   versions, and [here](https://smithay.github.io/smithay) for the master branch.
-- **Safety:** Smithay will target to be safe to use, because Rust.
-- **Modularity:** Smithay is not a framework, and will not be constraining. If there is a
+* **Safety:** Smithay will target to be safe to use, because Rust.
+* **Modularity:** Smithay is not a framework, and will not be constraining. If there is a
   part you don't want to use, you should not be forced to use it.
-- **High-level:** You should be able to not have to worry about gory low-level stuff (but 
+* **High-level:** You should be able to not have to worry about gory low-level stuff (but
   Smithay won't stop you if you really want to dive into it).
-
 
 ## Anvil
 
@@ -39,28 +84,28 @@ To get informations about it and how you can run it visit [anvil README](https:/
 
 ## Other compositors that use Smithay
 
-- [Cosmic](https://github.com/pop-os/cosmic-epoch): Next generation Cosmic desktop environment
-- [Catacomb](https://github.com/catacombing/catacomb): A Wayland Mobile Compositor
-- [MagmaWM](https://github.com/MagmaWM/MagmaWM): A versatile and customizable Wayland Compositor
-- [Niri](https://github.com/YaLTeR/niri): A scrollable-tiling Wayland compositor
-- [Strata](https://github.com/StrataWM/strata): A cutting-edge, robust and sleek Wayland compositor
-- [Pinnacle](https://github.com/Ottatop/pinnacle): A WIP Wayland compositor, inspired by AwesomeWM 
-- [Sudbury](https://gitlab.freedesktop.org/bwidawsk/sudbury): Compositor designed for ChromeOS
-- [wprs](https://github.com/wayland-transpositor/wprs): Like [xpra](https://en.wikipedia.org/wiki/Xpra), but for Wayland, and written in
+* [Cosmic](https://github.com/pop-os/cosmic-epoch): Next generation Cosmic desktop environment
+* [Catacomb](https://github.com/catacombing/catacomb): A Wayland Mobile Compositor
+* [MagmaWM](https://github.com/MagmaWM/MagmaWM): A versatile and customizable Wayland Compositor
+* [Niri](https://github.com/YaLTeR/niri): A scrollable-tiling Wayland compositor
+* [Strata](https://github.com/StrataWM/strata): A cutting-edge, robust and sleek Wayland compositor
+* [Pinnacle](https://github.com/Ottatop/pinnacle): A WIP Wayland compositor, inspired by AwesomeWM
+* [Sudbury](https://gitlab.freedesktop.org/bwidawsk/sudbury): Compositor designed for ChromeOS
+* [wprs](https://github.com/wayland-transpositor/wprs): Like [xpra](https://en.wikipedia.org/wiki/Xpra), but for Wayland, and written in
 Rust.
-- [Local Desktop](https://github.com/localdesktop/localdesktop): An Android app for running GUI Linux via PRoot and Wayland.
+* [Local Desktop](https://github.com/localdesktop/localdesktop): An Android app for running GUI Linux via PRoot and Wayland.
 
 ## System Dependencies
 
 (This list can depend on features you enable)
 
-- `libwayland`
-- `libxkbcommon`
-- `libudev`
-- `libinput`
-- `libgbm`
-- [`libseat`](https://git.sr.ht/~kennylevinsen/seatd)
-- `xwayland`
+* `libwayland`
+* `libxkbcommon`
+* `libudev`
+* `libinput`
+* `libgbm`
+* [`libseat`](https://git.sr.ht/~kennylevinsen/seatd)
+* `xwayland`
 
 ## Contact us
 
