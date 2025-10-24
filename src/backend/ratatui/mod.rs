@@ -4,6 +4,7 @@ use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
 use crate::{backend::renderer::ratatui::RatatuiRenderer, utils::Size};
 use std::{
+    collections::HashSet,
     io,
     os::{fd::AsFd, unix::prelude::BorrowedFd},
     time::{Duration, Instant},
@@ -76,6 +77,7 @@ impl RatatuiBackend {
             event_token: None,
             timer: None,
             refresh_interval,
+            keyboard_state: KeyboardState::new(),
         }
     }
 }
@@ -86,6 +88,7 @@ pub struct RatatuiEventSource {
     event_token: Option<calloop::Token>,
     timer: Option<Timer>,
     refresh_interval: Duration,
+    keyboard_state: KeyboardState,
 }
 
 /// TODO doc
@@ -96,9 +99,188 @@ pub enum RatatuiEvent {
     /// TODO doc
     Resize(u16, u16),
     /// TODO doc
-    Key(crossterm::event::KeyEvent),
+    Key {
+        code: u32,
+        kind: crossterm::event::KeyEventKind,
+    },
     /// TODO doc
     Mouse(crossterm::event::MouseEvent),
+}
+
+fn to_input_code(code: crossterm::event::KeyCode) -> Option<u32> {
+    use crossterm::event::KeyCode;
+    use input_event_codes::*;
+
+    Some(
+        match code {
+            KeyCode::Esc => KEY_ESC!(),
+            KeyCode::Char('1') => KEY_1!(),
+            KeyCode::Char('2') => KEY_2!(),
+            KeyCode::Char('3') => KEY_3!(),
+            KeyCode::Char('4') => KEY_4!(),
+            KeyCode::Char('5') => KEY_5!(),
+            KeyCode::Char('6') => KEY_6!(),
+            KeyCode::Char('7') => KEY_7!(),
+            KeyCode::Char('8') => KEY_8!(),
+            KeyCode::Char('9') => KEY_9!(),
+            KeyCode::Char('0') => KEY_0!(),
+            KeyCode::Char('-') => KEY_MINUS!(),
+            KeyCode::Char('=') => KEY_EQUAL!(),
+            KeyCode::Backspace => KEY_BACKSPACE!(),
+            KeyCode::Tab => KEY_TAB!(),
+            KeyCode::Char('Q') | KeyCode::Char('q') => KEY_Q!(),
+            KeyCode::Char('W') | KeyCode::Char('w') => KEY_W!(),
+            KeyCode::Char('E') | KeyCode::Char('e') => KEY_E!(),
+            KeyCode::Char('R') | KeyCode::Char('r') => KEY_R!(),
+            KeyCode::Char('T') | KeyCode::Char('t') => KEY_T!(),
+            KeyCode::Char('Y') | KeyCode::Char('y') => KEY_Y!(),
+            KeyCode::Char('U') | KeyCode::Char('u') => KEY_U!(),
+            KeyCode::Char('I') | KeyCode::Char('i') => KEY_I!(),
+            KeyCode::Char('O') | KeyCode::Char('o') => KEY_O!(),
+            KeyCode::Char('P') | KeyCode::Char('p') => KEY_P!(),
+            KeyCode::Char('[') | KeyCode::Char('{') => KEY_LEFTBRACE!(),
+            KeyCode::Char(']') | KeyCode::Char('}') => KEY_RIGHTBRACE!(),
+            KeyCode::Enter => KEY_ENTER!(),
+            KeyCode::Char('A') | KeyCode::Char('a') => KEY_A!(),
+            KeyCode::Char('S') | KeyCode::Char('s') => KEY_S!(),
+            KeyCode::Char('D') | KeyCode::Char('d') => KEY_D!(),
+            KeyCode::Char('F') | KeyCode::Char('f') => KEY_F!(),
+            KeyCode::Char('G') | KeyCode::Char('g') => KEY_G!(),
+            KeyCode::Char('H') | KeyCode::Char('h') => KEY_H!(),
+            KeyCode::Char('J') | KeyCode::Char('j') => KEY_J!(),
+            KeyCode::Char('K') | KeyCode::Char('k') => KEY_K!(),
+            KeyCode::Char('L') | KeyCode::Char('l') => KEY_L!(),
+            KeyCode::Char(';') | KeyCode::Char(':') => KEY_SEMICOLON!(),
+            KeyCode::Char('\'') | KeyCode::Char('"') => KEY_APOSTROPHE!(),
+            KeyCode::Char('`') | KeyCode::Char('~') => KEY_GRAVE!(),
+            KeyCode::Char('\\') | KeyCode::Char('|') => KEY_BACKSLASH!(),
+            KeyCode::Char('Z') | KeyCode::Char('z') => KEY_Z!(),
+            KeyCode::Char('X') | KeyCode::Char('x') => KEY_X!(),
+            KeyCode::Char('C') | KeyCode::Char('c') => KEY_C!(),
+            KeyCode::Char('V') | KeyCode::Char('v') => KEY_V!(),
+            KeyCode::Char('B') | KeyCode::Char('b') => KEY_B!(),
+            KeyCode::Char('N') | KeyCode::Char('n') => KEY_N!(),
+            KeyCode::Char('M') | KeyCode::Char('m') => KEY_M!(),
+            KeyCode::Char(',') | KeyCode::Char('<') => KEY_COMMA!(),
+            KeyCode::Char('.') | KeyCode::Char('>') => KEY_DOT!(),
+            KeyCode::Char('/') | KeyCode::Char('?') => KEY_SLASH!(),
+            KeyCode::Char(' ') => KEY_SPACE!(),
+            KeyCode::F(1) => KEY_F1!(),
+            KeyCode::F(2) => KEY_F2!(),
+            KeyCode::F(3) => KEY_F3!(),
+            KeyCode::F(4) => KEY_F4!(),
+            KeyCode::F(5) => KEY_F5!(),
+            KeyCode::F(6) => KEY_F6!(),
+            KeyCode::F(7) => KEY_F7!(),
+            KeyCode::F(8) => KEY_F8!(),
+            KeyCode::F(9) => KEY_F9!(),
+            KeyCode::F(10) => KEY_F10!(),
+            KeyCode::F(11) => KEY_F11!(),
+            KeyCode::F(12) => KEY_F12!(),
+            KeyCode::F(13) => KEY_F13!(),
+            KeyCode::F(14) => KEY_F14!(),
+            KeyCode::F(15) => KEY_F15!(),
+            KeyCode::F(16) => KEY_F16!(),
+            KeyCode::F(17) => KEY_F17!(),
+            KeyCode::F(18) => KEY_F18!(),
+            KeyCode::F(19) => KEY_F19!(),
+            KeyCode::F(20) => KEY_F20!(),
+            KeyCode::F(21) => KEY_F21!(),
+            KeyCode::F(22) => KEY_F22!(),
+            KeyCode::F(23) => KEY_F23!(),
+            KeyCode::F(24) => KEY_F24!(),
+            KeyCode::NumLock => KEY_NUMLOCK!(),
+            KeyCode::CapsLock => KEY_CAPSLOCK!(),
+            KeyCode::Left => KEY_LEFT!(),
+            KeyCode::Right => KEY_RIGHT!(),
+            KeyCode::Up => KEY_UP!(),
+            KeyCode::Down => KEY_DOWN!(),
+            c => {
+                eprintln!("unsupported key code: {c:?}");
+                return None;
+            }
+        } + 8, /* +8 maps scancode to x11 keycode, see MIN_KEYCODE in evdev */
+               // TODO: type-based scancode -> keycode map
+    )
+}
+
+// One Ratatui key event may resolve to multiple events, if for example a modifier key changed in
+// the meantime.
+#[derive(Debug)]
+struct KeyboardState {
+    modifiers: crossterm::event::KeyModifiers,
+    keys_down: HashSet<crossterm::event::KeyCode>,
+}
+
+impl KeyboardState {
+    fn new() -> Self {
+        Self {
+            modifiers: crossterm::event::KeyModifiers::empty(),
+            keys_down: HashSet::new(),
+        }
+    }
+    fn update(&mut self, event: crossterm::event::KeyEvent) -> Vec<RatatuiEvent> {
+        use crossterm::event::KeyEventKind;
+        use crossterm::event::KeyModifiers;
+        use input_event_codes::*;
+
+        let mut events = Vec::new();
+        let mut emit = |code, kind| events.push(RatatuiEvent::Key { code, kind });
+        let flag_state = |flag: KeyModifiers| {
+            if !(flag & event.modifiers).is_empty() {
+                KeyEventKind::Press
+            } else {
+                KeyEventKind::Release
+            }
+        };
+
+        for flag in self.modifiers ^ event.modifiers {
+            match flag {
+                // No idea _which_ one was changed, emit both
+                crossterm::event::KeyModifiers::SHIFT => {
+                    emit(KEY_LEFTSHIFT!() + 8, flag_state(flag));
+                    emit(KEY_RIGHTSHIFT!() + 8, flag_state(flag));
+                }
+                crossterm::event::KeyModifiers::CONTROL => {
+                    emit(KEY_LEFTCTRL!() + 8, flag_state(flag));
+                    emit(KEY_RIGHTCTRL!() + 8, flag_state(flag));
+                }
+                crossterm::event::KeyModifiers::ALT => {
+                    emit(KEY_LEFTALT!() + 8, flag_state(flag));
+                    emit(KEY_RIGHTALT!() + 8, flag_state(flag));
+                }
+                crossterm::event::KeyModifiers::META => {
+                    emit(KEY_LEFTMETA!() + 8, flag_state(flag));
+                    emit(KEY_RIGHTMETA!() + 8, flag_state(flag));
+                }
+                _ => todo!("unsupported modifier: {flag:?}"),
+            }
+        }
+        self.modifiers = event.modifiers;
+
+        // We only get Press events?
+        for key in self.keys_down.drain() {
+            if let Some(code) = to_input_code(key) {
+                emit(code, KeyEventKind::Release);
+            } else {
+                eprintln!("unsupported event code {:?}", event.code);
+            }
+        }
+
+        match event.kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => {
+                self.keys_down.insert(event.code);
+                if let Some(code) = to_input_code(event.code) {
+                    emit(code, event.kind);
+                } else {
+                    eprintln!("unsupported event code {:?}", event.code);
+                }
+            }
+            KeyEventKind::Release => todo!("???? HOW ????"),
+        };
+
+        events
+    }
 }
 
 impl EventSource for RatatuiEventSource {
@@ -137,13 +319,16 @@ impl EventSource for RatatuiEventSource {
         }
 
         while crossterm::event::poll(Duration::from_millis(0))? {
-            let event = match crossterm::event::read()? {
-                crossterm::event::Event::Resize(width, height) => RatatuiEvent::Resize(width, height),
-                crossterm::event::Event::Key(event) => RatatuiEvent::Key(event),
-                crossterm::event::Event::Mouse(event) => RatatuiEvent::Mouse(event),
+            let events = match crossterm::event::read()? {
+                crossterm::event::Event::Resize(width, height) => vec![RatatuiEvent::Resize(width, height)],
+                crossterm::event::Event::Key(event) => self.keyboard_state.update(event),
+                crossterm::event::Event::Mouse(event) => vec![RatatuiEvent::Mouse(event)],
                 _ => continue,
             };
-            callback(event, data);
+
+            for event in events {
+                callback(event, data);
+            }
         }
         Ok(PostAction::Continue)
     }
@@ -273,23 +458,8 @@ mod input {
     #[derive(Debug)]
     pub struct KeyEvent {
         time: Instant,
-        event: crossterm::event::KeyEvent,
-    }
-
-    impl From<crossterm::event::KeyEvent> for KeyEvent {
-        fn from(event: crossterm::event::KeyEvent) -> Self {
-            let ret = Self {
-                time: Instant::now(),
-                event,
-            };
-            tracing::trace!(
-                "key event: code {:?}, state {:?}, count {:?}",
-                ret.key_code(),
-                ret.state(),
-                ret.count()
-            );
-            ret
-        }
+        code: u32,
+        kind: crossterm::event::KeyEventKind,
     }
 
     impl crate::backend::input::Event<Backend> for KeyEvent {
@@ -302,83 +472,45 @@ mod input {
         }
     }
 
+    // TODO: it's a mess
+    impl From<super::RatatuiEvent> for KeyEvent {
+        fn from(event: super::RatatuiEvent) -> Self {
+            let super::RatatuiEvent::Key { code, kind } = event else {
+                todo!("unreachable, sort this out at compile time");
+            };
+            let ret = Self {
+                time: Instant::now(),
+                code,
+                kind,
+            };
+            tracing::trace!(
+                "key event: code {:?}, state {:?}, count {:?}",
+                ret.key_code(),
+                ret.state(),
+                ret.count()
+            );
+            ret
+        }
+    }
+
     impl input::KeyboardKeyEvent<Backend> for KeyEvent {
         fn key_code(&self) -> xkbcommon::xkb::Keycode {
-            // https://gitlab.freedesktop.org/libinput/libinput/-/blob/main/include/linux/linux/input-event-codes.h
-            let code: u32 = match self.event.code {
-                KeyCode::Esc => 1,
-                KeyCode::Char('1') => 2,
-                KeyCode::Char('2') => 3,
-                KeyCode::Char('3') => 4,
-                KeyCode::Char('4') => 5,
-                KeyCode::Char('5') => 6,
-                KeyCode::Char('6') => 7,
-                KeyCode::Char('7') => 8,
-                KeyCode::Char('8') => 9,
-                KeyCode::Char('9') => 10,
-                KeyCode::Char('0') => 11,
-                KeyCode::Char('-') => 12,
-                KeyCode::Char('=') => 13,
-                KeyCode::Backspace => 14,
-                KeyCode::Tab => 15,
-                KeyCode::Char('Q') | KeyCode::Char('q') => 16,
-                KeyCode::Char('W') | KeyCode::Char('w') => 17,
-                KeyCode::Char('E') | KeyCode::Char('e') => 18,
-                KeyCode::Char('R') | KeyCode::Char('r') => 19,
-                KeyCode::Char('T') | KeyCode::Char('t') => 20,
-                KeyCode::Char('Y') | KeyCode::Char('y') => 21,
-                KeyCode::Char('U') | KeyCode::Char('u') => 22,
-                KeyCode::Char('I') | KeyCode::Char('i') => 23,
-                KeyCode::Char('O') | KeyCode::Char('o') => 24,
-                KeyCode::Char('P') | KeyCode::Char('p') => 25,
-                KeyCode::Char('[') => 26,
-                KeyCode::Char(']') => 27,
-                KeyCode::Enter => 28,
-                KeyCode::Char('A') | KeyCode::Char('a') => 30,
-                KeyCode::Char('S') | KeyCode::Char('s') => 31,
-                KeyCode::Char('D') | KeyCode::Char('d') => 32,
-                KeyCode::Char('F') | KeyCode::Char('f') => 33,
-                KeyCode::Char('G') | KeyCode::Char('g') => 34,
-                KeyCode::Char('H') | KeyCode::Char('h') => 35,
-                KeyCode::Char('J') | KeyCode::Char('j') => 36,
-                KeyCode::Char('K') | KeyCode::Char('k') => 37,
-                KeyCode::Char('L') | KeyCode::Char('l') => 38,
-                KeyCode::Char(';') => 39,
-                KeyCode::Char('\'') => 40,
-                KeyCode::Char('`') => 41,
-                KeyCode::Char('\\') => 42,
-                KeyCode::Char('Z') | KeyCode::Char('z') => 44,
-                KeyCode::Char('X') | KeyCode::Char('x') => 45,
-                KeyCode::Char('C') | KeyCode::Char('c') => 46,
-                KeyCode::Char('V') | KeyCode::Char('v') => 47,
-                KeyCode::Char('B') | KeyCode::Char('b') => 48,
-                KeyCode::Char('N') | KeyCode::Char('n') => 49,
-                KeyCode::Char('M') | KeyCode::Char('m') => 50,
-                KeyCode::Char(',') => 51,
-                KeyCode::Char('.') => 52,
-                KeyCode::Char('/') => 53,
-                KeyCode::Char(' ') => 57,
-                KeyCode::F(n) => 58 + n as u32,
-                KeyCode::NumLock => 69,
-                KeyCode::CapsLock => 70,
-                KeyCode::Left => 105,
-                c => todo!("unsupported key: {c:?}"),
-            };
-            (code + 8).into()
+            dbg!(self);
+            self.code.into()
         }
 
         fn state(&self) -> input::KeyState {
-            match self.event.kind {
-                KeyEventKind::Press | KeyEventKind::Repeat => input::KeyState::Pressed,
+            use crossterm::event::KeyEventKind;
+
+            match self.kind {
+                KeyEventKind::Press => input::KeyState::Pressed,
                 KeyEventKind::Release => input::KeyState::Released,
+                _ => todo!(),
             }
         }
 
         fn count(&self) -> u32 {
-            match self.event.kind {
-                KeyEventKind::Press | KeyEventKind::Repeat => 1,
-                KeyEventKind::Release => 0,
-            }
+            1
         }
     }
 

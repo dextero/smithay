@@ -123,17 +123,7 @@ pub fn init_ratatui(
                             None,
                         );
                     }
-                    RatatuiEvent::Key(mut event) => {
-                        if event.code == KeyCode::Char('c') && event.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            state.loop_signal.stop();
-                        }
-
-                        state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
-                            event: event.into(),
-                        });
-
-                        event.kind = KeyEventKind::Release;
+                    event @ RatatuiEvent::Key { .. } => {
                         state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
                             event: event.into(),
                         });
