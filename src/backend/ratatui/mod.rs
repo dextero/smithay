@@ -4,7 +4,9 @@ use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
 use crate::{backend::renderer::ratatui::RatatuiRenderer, utils::Size};
 use std::{
-    io, os::{fd::AsFd, unix::prelude::BorrowedFd}, time::{Duration, Instant}
+    io,
+    os::{fd::AsFd, unix::prelude::BorrowedFd},
+    time::{Duration, Instant},
 };
 
 #[derive(Debug)]
@@ -70,7 +72,11 @@ impl RatatuiBackend {
 
     /// TODO doc
     pub fn event_source(&self, refresh_interval: Duration) -> RatatuiEventSource {
-        RatatuiEventSource { event_token: None, timer: None, refresh_interval }
+        RatatuiEventSource {
+            event_token: None,
+            timer: None,
+            refresh_interval,
+        }
     }
 }
 
@@ -118,7 +124,7 @@ impl EventSource for RatatuiEventSource {
             if token == timer.token {
                 timer.timer.read();
                 callback(RatatuiEvent::Redraw, data);
-                return Ok(PostAction::Continue)
+                return Ok(PostAction::Continue);
             }
         }
 
@@ -194,7 +200,10 @@ mod input {
 
     use crossterm::event::{KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 
-    use crate::{backend::input::{self, KeyboardKeyEvent}, utils::Size};
+    use crate::{
+        backend::input::{self, KeyboardKeyEvent},
+        utils::Size,
+    };
 
     /// TODO doc
     #[derive(Debug)]
@@ -273,7 +282,12 @@ mod input {
                 time: Instant::now(),
                 event,
             };
-            tracing::trace!("key event: code {:?}, state {:?}, count {:?}", ret.key_code(), ret.state(), ret.count());
+            tracing::trace!(
+                "key event: code {:?}, state {:?}, count {:?}",
+                ret.key_code(),
+                ret.state(),
+                ret.count()
+            );
             ret
         }
     }
@@ -347,6 +361,7 @@ mod input {
                 KeyCode::F(n) => 58 + n as u32,
                 KeyCode::NumLock => 69,
                 KeyCode::CapsLock => 70,
+                KeyCode::Left => 105,
                 c => todo!("unsupported key: {c:?}"),
             };
             (code + 8).into()
@@ -377,8 +392,10 @@ mod input {
 
     impl MouseEvent {
         /// TODO: doc
-        pub fn new(mut event: crossterm::event::MouseEvent,
-                   window_size: Size<i32, crate::utils::Physical>) -> Self {
+        pub fn new(
+            mut event: crossterm::event::MouseEvent,
+            window_size: Size<i32, crate::utils::Physical>,
+        ) -> Self {
             event.row *= 2;
             Self {
                 time: Instant::now(),
