@@ -41,7 +41,7 @@ size = 1
 ```
 
 ```
-alacritty --config-file  ~/.config/alacritty/tiny-font.toml --command bash -c "cd $PWD && cargo run --release 2>/tmp/log"
+alacritty --config-file tiny-font.toml --command bash -c "cd $PWD && cargo run --release 2>/tmp/log"
 ```
 
 <img align="right" width="25%" src="https://github.com/Smithay/smithay/assets/20758186/7a84ab10-e229-4823-bad8-9c647546407b">
