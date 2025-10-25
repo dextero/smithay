@@ -426,7 +426,6 @@ mod input {
 
     impl input::KeyboardKeyEvent<Backend> for KeyEvent {
         fn key_code(&self) -> xkbcommon::xkb::Keycode {
-            dbg!(self);
             self.code.into()
         }
 
