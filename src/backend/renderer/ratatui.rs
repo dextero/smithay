@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use crossterm::ExecutableCommand;
-use indexmap::Equivalent;
 use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::style::Color;
@@ -33,6 +32,12 @@ use crate::wayland::shm::{shm_format_to_fourcc, with_buffer_contents};
 pub struct RatatuiRenderer {
     /// TODO: docs
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
+}
+
+impl Default for RatatuiRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RatatuiRenderer {
@@ -124,9 +129,9 @@ fn pixels_into_argb8888<const F: u32>(ptr: *const u8, size: usize) -> Vec<PixelA
 }
 
 impl ImportMemWl for RatatuiRenderer {
-    fn import_shm_buffer<'buf>(
+    fn import_shm_buffer(
         &mut self,
-        buffer: &'buf wayland_server::protocol::wl_buffer::WlBuffer,
+        buffer: &wayland_server::protocol::wl_buffer::WlBuffer,
         _surface: Option<&crate::wayland::compositor::SurfaceData>,
         _damage: &[Rectangle<i32, BufferCoord>],
     ) -> Result<Self::TextureId, Self::Error> {
@@ -160,7 +165,7 @@ trait Blend {
 
 impl Blend for ratatui::buffer::Cell {
     fn blend_with<const F: u32>(&mut self, fg_pix: Option<Pixel<F>>, bg_pix: Option<Pixel<F>>, alpha: f32) {
-        assert!(0f32 <= alpha && alpha <= 1f32);
+        assert!((0f32..=1f32).contains(&alpha));
 
         fn blend(bg: (u8, u8, u8), fg: (u8, u8, u8), alpha: f32) -> Color {
             let one_minus_alpha = 1f32 - alpha;
@@ -203,8 +208,8 @@ impl<const F: u32> Pixel<F> {
             Ok(Fourcc::Xrgb8888) => (self.0 >> 16) as u8,
             Ok(Fourcc::Rgba8888) => (self.0 >> 24) as u8,
             Ok(Fourcc::Rgbx8888) => (self.0 >> 24) as u8,
-            Ok(Fourcc::Abgr8888) => (self.0 >> 0) as u8,
-            Ok(Fourcc::Xbgr8888) => (self.0 >> 0) as u8,
+            Ok(Fourcc::Abgr8888) => self.0 as u8,
+            Ok(Fourcc::Xbgr8888) => self.0 as u8,
             Ok(Fourcc::Bgra8888) => (self.0 >> 8) as u8,
             Ok(Fourcc::Bgrx8888) => (self.0 >> 8) as u8,
             Ok(f) => todo!("unsupported format: {f:?}"),
@@ -229,8 +234,8 @@ impl<const F: u32> Pixel<F> {
 
     fn b(&self) -> u8 {
         match Fourcc::try_from(F) {
-            Ok(Fourcc::Argb8888) => (self.0 >> 0) as u8,
-            Ok(Fourcc::Xrgb8888) => (self.0 >> 0) as u8,
+            Ok(Fourcc::Argb8888) => self.0 as u8,
+            Ok(Fourcc::Xrgb8888) => self.0 as u8,
             Ok(Fourcc::Rgba8888) => (self.0 >> 8) as u8,
             Ok(Fourcc::Rgbx8888) => (self.0 >> 8) as u8,
             Ok(Fourcc::Abgr8888) => (self.0 >> 16) as u8,
@@ -246,11 +251,11 @@ impl<const F: u32> Pixel<F> {
         match Fourcc::try_from(F) {
             Ok(Fourcc::Argb8888) => (self.0 >> 24) as u8,
             Ok(Fourcc::Xrgb8888) => u8::MAX,
-            Ok(Fourcc::Rgba8888) => (self.0 >> 0) as u8,
+            Ok(Fourcc::Rgba8888) => self.0 as u8,
             Ok(Fourcc::Rgbx8888) => u8::MAX,
             Ok(Fourcc::Abgr8888) => (self.0 >> 24) as u8,
             Ok(Fourcc::Xbgr8888) => u8::MAX,
-            Ok(Fourcc::Bgra8888) => (self.0 >> 0) as u8,
+            Ok(Fourcc::Bgra8888) => self.0 as u8,
             Ok(Fourcc::Bgrx8888) => u8::MAX,
             Ok(f) => todo!("unsupported format: {f:?}"),
             Err(e) => todo!("invalid format: {e:?}"),
@@ -271,17 +276,15 @@ impl<const F: u32> IntoArgb8888 for &Pixel<F> {
 impl<const F: u32> IntoArgb8888 for Pixel<F> {
     fn into_argb8888(self) -> PixelArgb8888 {
         Pixel::<{ Fourcc::Argb8888 as u32 }>(
-            u32::from(self.a()) << 24
-                | u32::from(self.r()) << 16
-                | u32::from(self.g()) << 8
-                | u32::from(self.b()) << 0,
+            (u32::from(self.a()) << 24) | (u32::from(self.r()) << 16) | (u32::from(self.g()) << 8)
+                | u32::from(self.b()),
         )
     }
 }
 
-impl<const F: u32> Into<Color> for Pixel<F> {
-    fn into(self) -> Color {
-        Color::Rgb(self.r(), self.g(), self.b())
+impl<const F: u32> From<Pixel<F>> for Color {
+    fn from(val: Pixel<F>) -> Self {
+        Color::Rgb(val.r(), val.g(), val.b())
     }
 }
 
@@ -291,7 +294,7 @@ impl ImportDma for RatatuiRenderer {
         dmabuf: &crate::backend::allocator::dmabuf::Dmabuf,
         _damage: Option<&[Rectangle<i32, BufferCoord>]>,
     ) -> Result<Self::TextureId, Self::Error> {
-        let size = Size::new(dmabuf.width().into(), dmabuf.height().into());
+        let size = Size::new(dmabuf.width(), dmabuf.height());
         let map = dmabuf.map_plane(0, DmabufMappingMode::READ).unwrap();
         let ptr = map.ptr() as *const u8;
         let len = map.length();
@@ -481,7 +484,7 @@ impl Drop for RatatuiFrame<'_, '_> {
     }
 }
 
-impl<'buffer> Frame for RatatuiFrame<'_, 'buffer> {
+impl Frame for RatatuiFrame<'_, '_> {
     type Error = RatatuiError;
     type TextureId = RatatuiTextureHandle;
 

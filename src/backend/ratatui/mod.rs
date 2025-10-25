@@ -4,7 +4,6 @@ use timerfd::{SetTimeFlags, TimerFd, TimerState};
 
 use crate::{backend::renderer::ratatui::RatatuiRenderer, utils::Size};
 use std::{
-    collections::HashSet,
     io,
     os::{fd::AsFd, unix::prelude::BorrowedFd},
     time::{Duration, Instant},
@@ -314,7 +313,7 @@ impl EventSource for RatatuiEventSource {
 mod input {
     use std::time::Instant;
 
-    use crossterm::event::{KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+    use crossterm::event::{MouseButton, MouseEventKind};
 
     use crate::{
         backend::input::{self, KeyboardKeyEvent},
