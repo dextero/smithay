@@ -7,6 +7,7 @@ use smithay::{
     },
     output::Output,
     reexports::{
+        wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1,
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
             protocol::{wl_output, wl_seat, wl_surface::WlSurface},
@@ -178,6 +179,7 @@ impl XdgShellHandler for Smallvil {
                     state.states.set(xdg_toplevel::State::Fullscreen);
                     state.size = Some(geometry.size);
                     state.fullscreen_output = wl_output;
+                    state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ClientSide);
                 });
                 eprintln!("Fullscreening: {:?}", window);
             }
