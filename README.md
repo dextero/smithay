@@ -14,7 +14,6 @@ Idk, it sounded funny in my head
 
 Jank:
 
-* Key release events are messed up. crossterm can only emit them when kitty terminal protocol is used.
 * Mouse coordinates can't handle resizing the window after startup.
 * IT'S SLOOOOOOOW
 * You can't stop it with Ctrl+C, only `kill` it from another terminal
