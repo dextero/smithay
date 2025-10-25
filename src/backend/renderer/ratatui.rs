@@ -1,3 +1,5 @@
+// TODO
+#![allow(missing_docs)]
 #![cfg_attr(docsrs, doc(cfg(feature = "ratatui_backend")))]
 
 use std::io;
@@ -30,7 +32,6 @@ use crate::wayland::shm::{shm_format_to_fourcc, with_buffer_contents};
 /// A renderer for the ratatui backend
 #[derive(Debug)]
 pub struct RatatuiRenderer {
-    /// TODO: docs
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
 }
 
@@ -55,7 +56,6 @@ impl RatatuiRenderer {
         Self { terminal }
     }
 
-    /// TODO
     pub fn terminal_size(&self) -> ratatui::layout::Size {
         self.terminal.size().unwrap()
     }
@@ -66,7 +66,6 @@ impl RatatuiRenderer {
         Size::new(size.width.into(), i32::from(size.height) * 2)
     }
 
-    /// TODO
     pub fn swap_buffers(&mut self, mut fb: RatatuiFramebuffer) -> Result<RatatuiFramebuffer, RatatuiError> {
         let expected_size = self.terminal_size();
         let actual_size = fb.buffer.area.as_size();
@@ -79,7 +78,6 @@ impl RatatuiRenderer {
         Ok(fb)
     }
 
-    /// TODO: docs
     pub fn new_framebuffer(&self) -> RatatuiFramebuffer {
         let size = self.terminal_size();
         let buffer = ratatui::buffer::Buffer::empty(Rect::new(0, 0, size.width, size.height));
@@ -94,7 +92,6 @@ impl Drop for RatatuiRenderer {
     }
 }
 
-/// TODO: docs
 #[derive(Debug)]
 pub struct RatatuiFramebuffer {
     buffer: ratatui::buffer::Buffer,
@@ -276,7 +273,9 @@ impl<const F: u32> IntoArgb8888 for &Pixel<F> {
 impl<const F: u32> IntoArgb8888 for Pixel<F> {
     fn into_argb8888(self) -> PixelArgb8888 {
         Pixel::<{ Fourcc::Argb8888 as u32 }>(
-            (u32::from(self.a()) << 24) | (u32::from(self.r()) << 16) | (u32::from(self.g()) << 8)
+            (u32::from(self.a()) << 24)
+                | (u32::from(self.r()) << 16)
+                | (u32::from(self.g()) << 8)
                 | u32::from(self.b()),
         )
     }

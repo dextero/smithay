@@ -1,3 +1,6 @@
+// TODO
+#![allow(missing_docs)]
+
 //! A backend for smithay that renders to a tty.
 use calloop::{EventSource, Interest, Mode, PostAction};
 use timerfd::{SetTimeFlags, TimerFd, TimerState};
@@ -34,11 +37,6 @@ impl Timer {
         };
         self.timer.set_state(state, SetTimeFlags::Default);
     }
-
-    pub fn set_interval(&mut self, interval: Duration) {
-        self.interval = interval;
-        self.reset();
-    }
 }
 
 impl AsFd for Timer {
@@ -70,7 +68,6 @@ impl RatatuiBackend {
         self.renderer.window_size()
     }
 
-    /// TODO doc
     pub fn event_source(&self, refresh_interval: Duration) -> RatatuiEventSource {
         RatatuiEventSource {
             event_token: None,
@@ -80,7 +77,6 @@ impl RatatuiBackend {
     }
 }
 
-/// TODO doc
 #[derive(Debug)]
 pub struct RatatuiEventSource {
     event_token: Option<calloop::Token>,
@@ -88,19 +84,14 @@ pub struct RatatuiEventSource {
     refresh_interval: Duration,
 }
 
-/// TODO doc
 #[derive(Debug)]
 pub enum RatatuiEvent {
-    /// TODO doc
     Redraw,
-    /// TODO doc
     Resize(u16, u16),
-    /// TODO doc
     Key {
         code: u32,
         kind: crossterm::event::KeyEventKind,
     },
-    /// TODO doc
     Mouse(crossterm::event::MouseEvent),
 }
 
@@ -320,7 +311,6 @@ mod input {
         utils::Size,
     };
 
-    /// TODO doc
     #[derive(Debug)]
     pub struct Backend;
 
@@ -384,7 +374,6 @@ mod input {
         }
     }
 
-    /// TODO doc
     #[derive(Debug)]
     pub struct KeyEvent {
         time: Instant,
@@ -442,7 +431,6 @@ mod input {
         }
     }
 
-    /// TODO doc
     #[derive(Debug)]
     pub struct MouseEvent {
         time: Instant,
