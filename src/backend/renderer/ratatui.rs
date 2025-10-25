@@ -41,6 +41,11 @@ impl RatatuiRenderer {
         let terminal = ratatui::init();
         std::io::stdout()
             .execute(crossterm::event::EnableMouseCapture)
+            .unwrap()
+            .execute(crossterm::event::PushKeyboardEnhancementFlags(
+                crossterm::event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | crossterm::event::KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES,
+            ))
             .unwrap();
         Self { terminal }
     }
@@ -171,7 +176,7 @@ impl Blend for ratatui::buffer::Cell {
                 self.fg = blend((r, g, b), (pix.r(), pix.g(), pix.b()), alpha);
             }
             (_, Some(pix)) => self.fg = pix.into(),
-            (_, None) => {},
+            (_, None) => {}
         }
 
         match (self.bg, bg_pix) {
@@ -180,7 +185,7 @@ impl Blend for ratatui::buffer::Cell {
                 self.bg = blend((r, g, b), (pix.r(), pix.g(), pix.b()), alpha);
             }
             (_, Some(pix)) => self.bg = pix.into(),
-            (_, None) => {},
+            (_, None) => {}
         }
     }
 }

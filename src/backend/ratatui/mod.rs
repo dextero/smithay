@@ -77,7 +77,6 @@ impl RatatuiBackend {
             event_token: None,
             timer: None,
             refresh_interval,
-            keyboard_state: KeyboardState::new(),
         }
     }
 }
@@ -88,7 +87,6 @@ pub struct RatatuiEventSource {
     event_token: Option<calloop::Token>,
     timer: Option<Timer>,
     refresh_interval: Duration,
-    keyboard_state: KeyboardState,
 }
 
 /// TODO doc
@@ -109,6 +107,7 @@ pub enum RatatuiEvent {
 
 fn to_input_code(code: crossterm::event::KeyCode) -> Option<u32> {
     use crossterm::event::KeyCode;
+    use crossterm::event::ModifierKeyCode;
     use input_event_codes::*;
 
     Some(
@@ -195,6 +194,12 @@ fn to_input_code(code: crossterm::event::KeyCode) -> Option<u32> {
             KeyCode::Right => KEY_RIGHT!(),
             KeyCode::Up => KEY_UP!(),
             KeyCode::Down => KEY_DOWN!(),
+            KeyCode::Modifier(ModifierKeyCode::LeftShift) => KEY_LEFTSHIFT!(),
+            KeyCode::Modifier(ModifierKeyCode::RightShift) => KEY_RIGHTSHIFT!(),
+            KeyCode::Modifier(ModifierKeyCode::LeftControl) => KEY_LEFTCTRL!(),
+            KeyCode::Modifier(ModifierKeyCode::RightControl) => KEY_RIGHTCTRL!(),
+            KeyCode::Modifier(ModifierKeyCode::LeftAlt) => KEY_LEFTALT!(),
+            KeyCode::Modifier(ModifierKeyCode::RightAlt) => KEY_RIGHTALT!(),
             c => {
                 eprintln!("unsupported key code: {c:?}");
                 return None;
@@ -202,86 +207,6 @@ fn to_input_code(code: crossterm::event::KeyCode) -> Option<u32> {
         } + 8, /* +8 maps scancode to x11 keycode, see MIN_KEYCODE in evdev */
                // TODO: type-based scancode -> keycode map
     )
-}
-
-// One Ratatui key event may resolve to multiple events, if for example a modifier key changed in
-// the meantime.
-#[derive(Debug)]
-struct KeyboardState {
-    modifiers: crossterm::event::KeyModifiers,
-    keys_down: HashSet<crossterm::event::KeyCode>,
-}
-
-impl KeyboardState {
-    fn new() -> Self {
-        Self {
-            modifiers: crossterm::event::KeyModifiers::empty(),
-            keys_down: HashSet::new(),
-        }
-    }
-    fn update(&mut self, event: crossterm::event::KeyEvent) -> Vec<RatatuiEvent> {
-        use crossterm::event::KeyEventKind;
-        use crossterm::event::KeyModifiers;
-        use input_event_codes::*;
-
-        let mut events = Vec::new();
-        let mut emit = |code, kind| events.push(RatatuiEvent::Key { code, kind });
-        let flag_state = |flag: KeyModifiers| {
-            if !(flag & event.modifiers).is_empty() {
-                KeyEventKind::Press
-            } else {
-                KeyEventKind::Release
-            }
-        };
-
-        for flag in self.modifiers ^ event.modifiers {
-            match flag {
-                // No idea _which_ one was changed, emit both
-                crossterm::event::KeyModifiers::SHIFT => {
-                    emit(KEY_LEFTSHIFT!() + 8, flag_state(flag));
-                    emit(KEY_RIGHTSHIFT!() + 8, flag_state(flag));
-                }
-                crossterm::event::KeyModifiers::CONTROL => {
-                    emit(KEY_LEFTCTRL!() + 8, flag_state(flag));
-                    emit(KEY_RIGHTCTRL!() + 8, flag_state(flag));
-                }
-                crossterm::event::KeyModifiers::ALT => {
-                    emit(KEY_LEFTALT!() + 8, flag_state(flag));
-                    emit(KEY_RIGHTALT!() + 8, flag_state(flag));
-                }
-                crossterm::event::KeyModifiers::META => {
-                    emit(KEY_LEFTMETA!() + 8, flag_state(flag));
-                    emit(KEY_RIGHTMETA!() + 8, flag_state(flag));
-                }
-                _ => todo!("unsupported modifier: {flag:?}"),
-            }
-        }
-        self.modifiers = event.modifiers;
-
-        // We only get Press events?
-        for key in self.keys_down.drain() {
-            if let Some(code) = to_input_code(key) {
-                emit(code, KeyEventKind::Release);
-            } else {
-                eprintln!("unsupported event code {:?}", event.code);
-            }
-        }
-
-        match event.kind {
-            KeyEventKind::Press => {
-                self.keys_down.insert(event.code);
-                if let Some(code) = to_input_code(event.code) {
-                    emit(code, event.kind);
-                } else {
-                    eprintln!("unsupported event code {:?}", event.code);
-                }
-            }
-            KeyEventKind::Release => todo!("???? HOW ????"),
-            KeyEventKind::Repeat => { /* ignore */ }
-        };
-
-        events
-    }
 }
 
 impl EventSource for RatatuiEventSource {
@@ -320,14 +245,19 @@ impl EventSource for RatatuiEventSource {
         }
 
         while crossterm::event::poll(Duration::from_millis(0))? {
-            let events = match crossterm::event::read()? {
-                crossterm::event::Event::Resize(width, height) => vec![RatatuiEvent::Resize(width, height)],
-                crossterm::event::Event::Key(event) => self.keyboard_state.update(event),
-                crossterm::event::Event::Mouse(event) => vec![RatatuiEvent::Mouse(event)],
+            let event = match crossterm::event::read()? {
+                crossterm::event::Event::Resize(width, height) => Some(RatatuiEvent::Resize(width, height)),
+                crossterm::event::Event::Key(event) => {
+                    to_input_code(event.code).map(|code| RatatuiEvent::Key {
+                        code,
+                        kind: event.kind,
+                    })
+                }
+                crossterm::event::Event::Mouse(event) => Some(RatatuiEvent::Mouse(event)),
                 _ => continue,
             };
 
-            for event in events {
+            if let Some(event) = event {
                 callback(event, data);
             }
         }
@@ -504,9 +434,8 @@ mod input {
             use crossterm::event::KeyEventKind;
 
             match self.kind {
-                KeyEventKind::Press => input::KeyState::Pressed,
+                KeyEventKind::Press | KeyEventKind::Repeat => input::KeyState::Pressed,
                 KeyEventKind::Release => input::KeyState::Released,
-                _ => todo!(),
             }
         }
 
