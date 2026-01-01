@@ -2,18 +2,17 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use smithay::{
     backend::{
         input::InputEvent,
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    reexports::calloop::EventLoop,
+    reexports::{calloop::EventLoop, wayland_server::protocol::wl_shm},
     utils::{Physical, Size, Transform},
-    wayland::compositor::with_states,
+    wayland::{compositor::with_states, shm},
 };
-use tracing::error;
 
 use crate::gpu_renderer::GpuRenderer;
 use crate::vulkan_import::VulkanImport;
@@ -165,10 +164,63 @@ pub fn init_ratatui(
                                     let Some(buffer) = surface_state.buffer() else {
                                         bail!("window has no surface buffer");
                                     };
-                                    let dmabuf = smithay::wayland::dmabuf::get_dmabuf(buffer)
-                                        .with_context(|| "cannot get dmabuf from buffer (maybe it is SHM?)")?;
-                                    let texture =
-                                        unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
+                                    let texture = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
+                                        unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) }
+                                    } else if let Ok(shm_texture) = shm::with_buffer_contents(buffer, |ptr, _len, data| {
+                                        let offset = data.offset as usize;
+                                        let stride = data.stride as usize;
+                                        let height = data.height as usize;
+                                        let width = data.width as usize;
+
+                                        let size = wgpu::Extent3d {
+                                            width: width as u32,
+                                            height: height as u32,
+                                            depth_or_array_layers: 1,
+                                        };
+
+                                        let wgpu_format = match data.format {
+                                            wl_shm::Format::Argb8888 => wgpu::TextureFormat::Bgra8Unorm,
+                                            wl_shm::Format::Xrgb8888 => wgpu::TextureFormat::Bgra8Unorm,
+                                            wl_shm::Format::Abgr8888 => wgpu::TextureFormat::Rgba8Unorm,
+                                            wl_shm::Format::Xbgr8888 => wgpu::TextureFormat::Rgba8Unorm,
+                                            _ => wgpu::TextureFormat::Rgba8Unorm,
+                                        };
+
+                                        let texture = wgpu_device.create_texture(&wgpu::TextureDescriptor {
+                                            label: Some("shm_texture"),
+                                            size,
+                                            mip_level_count: 1,
+                                            sample_count: 1,
+                                            dimension: wgpu::TextureDimension::D2,
+                                            format: wgpu_format,
+                                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                                        });
+
+                                        let data_ptr = unsafe { ptr.add(offset) };
+                                        let data_slice = unsafe { std::slice::from_raw_parts(data_ptr, stride * height) };
+
+                                        wgpu_queue.write_texture(
+                                            wgpu::TexelCopyTextureInfo {
+                                                texture: &texture,
+                                                mip_level: 0,
+                                                origin: wgpu::Origin3d::ZERO,
+                                                aspect: wgpu::TextureAspect::All,
+                                            },
+                                            data_slice,
+                                            wgpu::TexelCopyBufferLayout {
+                                                offset: 0,
+                                                bytes_per_row: Some(stride as u32),
+                                                rows_per_image: Some(height as u32),
+                                            },
+                                            size,
+                                        );
+                                        texture
+                                    }) {
+                                        shm_texture
+                                    } else {
+                                        bail!("window has no dmabuf and shm failed");
+                                    };
                                     windows_to_render.push((texture, location, window.geometry().size));
                                     Ok(())
                                 })?;
@@ -339,12 +391,6 @@ pub fn init_ratatui(
                         state.space.refresh();
                         state.popups.cleanup();
                         let _ = display.flush_clients();
-
-                        // FIXME: exit to avoid infinite loop for LLM-assisted
-                        // debugging; if we get there without panic we're OK
-                        if elements_count > 0 {
-                            std::process::exit(0);
-                        }
                     }
                     RatatuiEvent::Resize(_, _) => {
                         output.change_current_state(
