@@ -108,12 +108,11 @@ impl RatatuiHandler {
             return;
         };
 
-        let geometry = window.geometry();
         let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
 
         with_surface_tree_downward(
             surface,
-            window_location - geometry.loc,
+            window_location,
             |_, states, &location| {
                 let mut location = location;
                 if let Some(subsurface) = states.data_map.get::<SubsurfaceCachedState>() {
