@@ -1,6 +1,7 @@
 use std::{ffi::OsString, sync::Arc};
 
 use smithay::{
+    backend::allocator::{Format, Fourcc, Modifier},
     desktop::{PopupManager, Space, Window, WindowSurfaceType},
     input::{Seat, SeatState},
     reexports::{
@@ -14,6 +15,7 @@ use smithay::{
     utils::{Logical, Point},
     wayland::{
         compositor::{CompositorClientState, CompositorState},
+        dmabuf::{DmabufGlobal, DmabufState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
@@ -36,6 +38,8 @@ pub struct Smallvil {
     pub compositor_state: CompositorState,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
+    pub dmabuf_state: DmabufState,
+    pub dmabuf_global: DmabufGlobal,
     pub output_manager_state: OutputManagerState,
     pub seat_state: SeatState<Smallvil>,
     pub data_device_state: DataDeviceState,
@@ -53,6 +57,26 @@ impl Smallvil {
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
+        let mut dmabuf_state = DmabufState::new();
+        let dmabuf_formats = vec![
+            Format {
+                code: Fourcc::Argb8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Xrgb8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Abgr8888,
+                modifier: Modifier::Linear,
+            },
+            Format {
+                code: Fourcc::Xbgr8888,
+                modifier: Modifier::Linear,
+            },
+        ];
+        let dmabuf_global = dmabuf_state.create_global::<Self>(&dh, dmabuf_formats);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
@@ -92,6 +116,8 @@ impl Smallvil {
             compositor_state,
             xdg_shell_state,
             shm_state,
+            dmabuf_state,
+            dmabuf_global,
             output_manager_state,
             seat_state,
             data_device_state,
