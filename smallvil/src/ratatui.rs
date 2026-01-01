@@ -9,7 +9,7 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Transform, Size},
+    utils::{Transform, Size, Physical},
     wayland::compositor::with_states,
 };
 
@@ -61,16 +61,23 @@ pub fn init_ratatui(
     let gpu_renderer = GpuRenderer::new(wgpu_device.clone(), wgpu_queue.clone());
     
     // Get raw Vulkan device for imports
-    let ash_device = unsafe {
+    let ash_instance = unsafe {
+        wgpu_instance.as_hal::<wgpu_hal::api::Vulkan>()
+            .expect("Failed to get Vulkan instance from wgpu")
+            .shared_instance()
+            .raw_instance()
+    };
+    let (ash_device, ash_pdev) = unsafe {
         wgpu_device.as_hal::<wgpu_hal::api::Vulkan>()
-            .map(|d| d.raw_device().clone())
+            .map(|d| (d.raw_device().clone(), d.raw_physical_device()))
             .expect("Failed to get Vulkan device from wgpu")
     };
-    let vulkan_import = VulkanImport::new(Arc::new(ash_device));
+    let vulkan_import = VulkanImport::new(Arc::new(ash_device), ash_instance, ash_pdev);
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
     let mut previous_texture: Option<wgpu::Texture> = None;
+    let mut current_screen_texture: Option<(wgpu::Texture, wgpu::TextureView, Size<i32, Physical>)> = None;
     let mut frames = 0;
     let mut render_start = std::time::Instant::now();
 
@@ -100,22 +107,28 @@ pub fn init_ratatui(
 
                         // Composite scene into a texture
                         let screen_size = output.current_mode().unwrap().size;
-                        let screen_desc = wgpu::TextureDescriptor {
-                            label: Some("screen_texture"),
-                            size: wgpu::Extent3d {
-                                width: screen_size.w as u32,
-                                height: screen_size.h as u32,
-                                depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba8Uint,
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                            view_formats: &[],
-                        };
-                        let screen_texture = wgpu_device.create_texture(&screen_desc);
-                        let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        
+                        if current_screen_texture.as_ref().map(|(_, _, size)| *size != screen_size).unwrap_or(true) {
+                            let screen_desc = wgpu::TextureDescriptor {
+                                label: Some("screen_texture"),
+                                size: wgpu::Extent3d {
+                                    width: screen_size.w as u32,
+                                    height: screen_size.h as u32,
+                                    depth_or_array_layers: 1,
+                                },
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba8Uint,
+                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                                view_formats: &[],
+                            };
+                            let tex = wgpu_device.create_texture(&screen_desc);
+                            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                            current_screen_texture = Some((tex, view, screen_size));
+                        }
+
+                        let (screen_texture, screen_view, _) = current_screen_texture.as_ref().unwrap();
 
                         let mut windows_to_render = Vec::new();
                         state.space.elements().for_each(|window| {
@@ -133,14 +146,63 @@ pub fn init_ratatui(
                             });
                         });
 
-                        gpu_renderer.render_scene(&screen_view, Size::from((screen_size.w, screen_size.h)), &windows_to_render);
+                        gpu_renderer.render_scene(screen_view, Size::from((screen_size.w, screen_size.h)), &windows_to_render);
 
                         // Encode to ANSI and print
-                        let ansi_string = pollster::block_on(ansi_encoder.ansi_from_texture(previous_texture.as_ref(), &screen_texture)).unwrap();
+                        let ansi_string = pollster::block_on(ansi_encoder.ansi_from_texture(previous_texture.as_ref(), screen_texture)).unwrap();
                         print!("{ansi_string}");
                         let _ = std::io::stdout().flush();
 
-                        previous_texture = Some(screen_texture);
+                        if !ansi_string.is_empty() {
+                            std::process::exit(0);
+                        }
+
+                        // We need a persistent copy for diffing if current_screen_texture is repurposed
+                        // Actually, GpuAnsiEncoder diffs current against previous.
+                        // If we reuse screen_texture, we must clone it or copy it.
+                        // For now, let's keep it simple and just clone the texture handle if possible, 
+                        // but wgpu::Texture is just a handle. The content changes.
+                        // So we MUST have a separate "previous" texture with copied content.
+                        
+                        let prev_tex = if let Some(ref prev) = previous_texture {
+                            if prev.size() == screen_texture.size() {
+                                prev.clone()
+                            } else {
+                                let desc = wgpu::TextureDescriptor {
+                                    label: Some("previous_texture"),
+                                    size: screen_texture.size(),
+                                    mip_level_count: 1,
+                                    sample_count: 1,
+                                    dimension: wgpu::TextureDimension::D2,
+                                    format: wgpu::TextureFormat::Rgba8Uint,
+                                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                    view_formats: &[],
+                                };
+                                wgpu_device.create_texture(&desc)
+                            }
+                        } else {
+                            let desc = wgpu::TextureDescriptor {
+                                label: Some("previous_texture"),
+                                size: screen_texture.size(),
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format: wgpu::TextureFormat::Rgba8Uint,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                view_formats: &[],
+                            };
+                            wgpu_device.create_texture(&desc)
+                        };
+
+                        let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("copy_to_prev") });
+                        encoder.copy_texture_to_texture(
+                            screen_texture.as_image_copy(),
+                            prev_tex.as_image_copy(),
+                            screen_texture.size()
+                        );
+                        wgpu_queue.submit(std::iter::once(encoder.finish()));
+                        
+                        previous_texture = Some(prev_tex);
 
                         state.space.elements().for_each(|window| {
                             window.send_frame(
