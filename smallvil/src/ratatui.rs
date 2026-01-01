@@ -144,7 +144,10 @@ pub fn init_ratatui(
                         let (screen_texture, screen_view, _) = current_screen_texture.as_ref().unwrap();
 
                         let mut windows_to_render = Vec::new();
-                        eprintln!("rendering {} windows", state.space.elements().count());
+                        let elements_count = state.space.elements().count();
+                        if elements_count > 0 {
+                            eprintln!("rendering {} windows", elements_count);
+                        }
                         state.space.elements().for_each(|window| {
                             let mut try_render = || -> anyhow::Result<()> {
                                 let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
@@ -160,10 +163,10 @@ pub fn init_ratatui(
                                         .lock()
                                         .unwrap();
                                     let Some(buffer) = surface_state.buffer() else {
-                                        bail!("{:#?} has no surface buffer", window);
+                                        bail!("window has no surface buffer");
                                     };
                                     let dmabuf = smithay::wayland::dmabuf::get_dmabuf(buffer)
-                                        .with_context(|| format!("cannot get dmabuf for {:#?}", window))?;
+                                        .with_context(|| "cannot get dmabuf from buffer (maybe it is SHM?)")?;
                                     let texture =
                                         unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
                                     windows_to_render.push((texture, location, window.geometry().size));
@@ -173,11 +176,11 @@ pub fn init_ratatui(
                             };
 
                             if let Err(e) = try_render() {
-                                error!("{:#?}", e);
+                                eprintln!("failed to render window: {:#?}", e);
                             }
                         });
-                        if windows_to_render.len() != state.space.elements().count() {
-                            panic!("failed to import all window dmabufs");
+                        if windows_to_render.len() != elements_count {
+                            eprintln!("Warning: failed to import {}/{} windows", elements_count - windows_to_render.len(), elements_count);
                         }
 
                         gpu_renderer.render_scene(
@@ -197,7 +200,12 @@ pub fn init_ratatui(
                         if !ansi_string.is_empty() {
                             // Save screenshot before exiting
                             let (width, height) = (screen_size.w as u32, screen_size.h as u32);
-                            let buffer_size = (width * height * 4) as wgpu::BufferAddress;
+                            let unpadded_bytes_per_row = width * 4;
+                            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+                            let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+                            let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+
+                            let buffer_size = (padded_bytes_per_row * height) as wgpu::BufferAddress;
                             let output_buffer = wgpu_device.create_buffer(&wgpu::BufferDescriptor {
                                 label: Some("screenshot_buffer"),
                                 size: buffer_size,
@@ -215,7 +223,7 @@ pub fn init_ratatui(
                                     buffer: &output_buffer,
                                     layout: wgpu::TexelCopyBufferLayout {
                                         offset: 0,
-                                        bytes_per_row: Some(width * 4),
+                                        bytes_per_row: Some(padded_bytes_per_row),
                                         rows_per_image: Some(height),
                                     },
                                 },
@@ -236,9 +244,16 @@ pub fn init_ratatui(
                             rx.recv().unwrap().unwrap();
 
                             let data = buffer_slice.get_mapped_range();
-                            let is_single_color = if data.len() >= 4 {
-                                let first_pixel = &data[0..4];
-                                data.chunks_exact(4).all(|pixel| pixel == first_pixel)
+                            
+                            // Remove padding if necessary for single color check and saving
+                            let mut unpadded_data = Vec::with_capacity((width * height * 4) as usize);
+                            for chunk in data.chunks_exact(padded_bytes_per_row as usize) {
+                                unpadded_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
+                            }
+
+                            let is_single_color = if unpadded_data.len() >= 4 {
+                                let first_pixel = &unpadded_data[0..4];
+                                unpadded_data.chunks_exact(4).all(|pixel| pixel == first_pixel)
                             } else {
                                 true
                             };
@@ -246,7 +261,7 @@ pub fn init_ratatui(
                             if !is_single_color {
                                 image::save_buffer(
                                     "/tmp/screenshot.png",
-                                    &data,
+                                    &unpadded_data,
                                     width,
                                     height,
                                     image::ExtendedColorType::Rgba8,
