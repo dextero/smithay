@@ -10,10 +10,10 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{calloop::EventLoop, wayland_server::protocol::wl_shm, wayland_server::DisplayHandle},
-    utils::{Logical, Physical, Point, Size, Transform},
+    utils::{Logical, Point, Size, Transform},
     wayland::{compositor::with_states, shm},
 };
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::gpu_renderer::GpuRenderer;
 use crate::vulkan_import::VulkanImport;
@@ -30,24 +30,11 @@ struct RatatuiHandler {
     output: Output,
     backend: ratatui::RatatuiBackend,
 
-    frames: u32,
-    render_start: std::time::Instant,
     tx: mpsc::Sender<Option<wgpu::Texture>>,
 }
 
 impl RatatuiHandler {
     fn redraw(&mut self, state: &mut Smallvil, display: &mut DisplayHandle) {
-        self.frames += 1;
-        if self.frames >= 60 {
-            let render_end = std::time::Instant::now();
-            eprintln!(
-                "FPS = {}",
-                self.frames as f64 / render_end.duration_since(self.render_start).as_secs_f64()
-            );
-            self.frames = 0;
-            self.render_start = std::time::Instant::now();
-        }
-
         // Composite scene into a texture
         let screen_size = self.output.current_mode().unwrap().size;
 
@@ -126,8 +113,10 @@ impl RatatuiHandler {
                 bail!("window has no surface buffer");
             };
             let texture = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
+                info!("texture: dmabuf import");
                 unsafe { self.vulkan_import.import_dmabuf(&self.wgpu_device, &dmabuf) }
             } else if let Ok(shm_texture) = shm::with_buffer_contents(buffer, |ptr, _len, data| {
+                info!("texture: shm import");
                 let offset = data.offset as usize;
                 let stride = data.stride as usize;
                 let height = data.height as usize;
@@ -144,7 +133,7 @@ impl RatatuiHandler {
                     wl_shm::Format::Xrgb8888 => wgpu::TextureFormat::Bgra8Unorm,
                     wl_shm::Format::Abgr8888 => wgpu::TextureFormat::Rgba8Unorm,
                     wl_shm::Format::Xbgr8888 => wgpu::TextureFormat::Rgba8Unorm,
-                    _ => wgpu::TextureFormat::Rgba8Unorm,
+                    _ => panic!("unsupported format: {:?}", data.format),
                 };
 
                 let texture = self.wgpu_device.create_texture(&wgpu::TextureDescriptor {
@@ -298,6 +287,9 @@ pub fn init_ratatui(
 
     tokio::spawn(async move {
         let mut previous_texture: Option<wgpu::Texture> = None;
+        let mut frames = 0;
+        let mut render_start = std::time::Instant::now();
+
         while let Some(msg) = rx.recv().await {
             if let Some(current_texture) = msg {
                 let ansi_string = ansi_encoder
@@ -307,6 +299,17 @@ pub fn init_ratatui(
                 print!("{}", &*ansi_string);
                 let _ = std::io::stdout().flush();
                 previous_texture = Some(current_texture);
+
+                frames += 1;
+                if frames >= 60 {
+                    let render_end = std::time::Instant::now();
+                    eprintln!(
+                        "FPS = {}",
+                        frames as f64 / render_end.duration_since(render_start).as_secs_f64()
+                    );
+                    frames = 0;
+                    render_start = std::time::Instant::now();
+                }
             } else {
                 previous_texture = None;
             }
@@ -320,8 +323,6 @@ pub fn init_ratatui(
         vulkan_import,
         output,
         backend,
-        frames: 0,
-        render_start: std::time::Instant::now(),
         tx,
     };
 
