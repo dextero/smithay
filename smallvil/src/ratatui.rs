@@ -194,17 +194,28 @@ pub fn init_ratatui(
                             rx.recv().unwrap().unwrap();
 
                             let data = buffer_slice.get_mapped_range();
-                            image::save_buffer(
-                                "/tmp/screenshot.png",
-                                &data,
-                                width,
-                                height,
-                                image::ExtendedColorType::Rgba8,
-                            ).expect("Failed to save screenshot");
+                            let is_single_color = if data.len() >= 4 {
+                                let first_pixel = &data[0..4];
+                                data.chunks_exact(4).all(|pixel| pixel == first_pixel)
+                            } else {
+                                true
+                            };
+
+                            if !is_single_color {
+                                image::save_buffer(
+                                    "/tmp/screenshot.png",
+                                    &data,
+                                    width,
+                                    height,
+                                    image::ExtendedColorType::Rgba8,
+                                ).expect("Failed to save screenshot");
+                                drop(data);
+                                output_buffer.unmap();
+
+                                std::process::exit(0);
+                            }
                             drop(data);
                             output_buffer.unmap();
-
-                            std::process::exit(0);
                         }
 
                         // We need a persistent copy for diffing if current_screen_texture is repurposed
