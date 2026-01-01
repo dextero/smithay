@@ -150,7 +150,7 @@ pub fn init_ratatui(
 
                         // Encode to ANSI and print
                         let ansi_string = pollster::block_on(ansi_encoder.ansi_from_texture(previous_texture.as_ref(), screen_texture)).unwrap();
-                        print!("{ansi_string}");
+                        print!("{}", &*ansi_string);
                         let _ = std::io::stdout().flush();
 
                         if !ansi_string.is_empty() {
