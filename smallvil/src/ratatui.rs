@@ -13,6 +13,7 @@ use smithay::{
     utils::{Logical, Physical, Point, Size, Transform},
     wayland::{compositor::with_states, shm},
 };
+use tracing::debug;
 
 use crate::gpu_renderer::GpuRenderer;
 use crate::vulkan_import::VulkanImport;
@@ -204,27 +205,24 @@ impl RatatuiHandler {
                 let _ = self.tx.try_send(None); // Reset diffing on resize
             }
             event @ RatatuiEvent::Key { .. } => {
-                eprintln!("Ratatui Key Event: {:?}", event);
-                state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
-                    event: event.into(),
-                });
+                debug!("Ratatui Key Event: {:?}", event);
+                state
+                    .process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard { event: event.into() });
             }
             RatatuiEvent::Mouse(event) => {
-                eprintln!("Ratatui Mouse Event: {:?}", event);
+                debug!("Ratatui Mouse Event: {:?}", event);
                 let e = RatatuiMouseEvent::new(event, self.backend.window_size());
                 let event = match event.kind {
-                    crossterm::event::MouseEventKind::Down(_)
-                    | crossterm::event::MouseEventKind::Up(_) => InputEvent::PointerButton { event: e },
-                    crossterm::event::MouseEventKind::Drag(_)
-                    | crossterm::event::MouseEventKind::Moved => {
+                    crossterm::event::MouseEventKind::Down(_) | crossterm::event::MouseEventKind::Up(_) => {
+                        InputEvent::PointerButton { event: e }
+                    }
+                    crossterm::event::MouseEventKind::Drag(_) | crossterm::event::MouseEventKind::Moved => {
                         InputEvent::PointerMotionAbsolute { event: e }
                     }
                     crossterm::event::MouseEventKind::ScrollDown
                     | crossterm::event::MouseEventKind::ScrollUp
                     | crossterm::event::MouseEventKind::ScrollLeft
-                    | crossterm::event::MouseEventKind::ScrollRight => {
-                        InputEvent::PointerAxis { event: e }
-                    }
+                    | crossterm::event::MouseEventKind::ScrollRight => InputEvent::PointerAxis { event: e },
                 };
                 state.process_input_event::<RatatuiInputBackend>(event);
             }

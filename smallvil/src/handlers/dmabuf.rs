@@ -1,6 +1,6 @@
-use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::delegate_dmabuf;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 
 use crate::Smallvil;
 

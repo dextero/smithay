@@ -320,18 +320,20 @@ mod tests {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("device poll failed");
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("device poll failed");
         rx.recv().unwrap().expect("map_async failed");
 
         let data = buffer_slice.get_mapped_range();
-        
+
         // Check pixel at (50, 50) which should be white
         let pixel_offset = ((50 * width + 50) * 4) as usize;
-        assert_eq!(data[pixel_offset..pixel_offset+4], [255, 255, 255, 255]);
+        assert_eq!(data[pixel_offset..pixel_offset + 4], [255, 255, 255, 255]);
 
         // Check pixel at (10, 10) which should be black (clear color)
         let pixel_offset = ((10 * width + 10) * 4) as usize;
-        assert_eq!(data[pixel_offset..pixel_offset+4], [0, 0, 0, 1]);
+        assert_eq!(data[pixel_offset..pixel_offset + 4], [0, 0, 0, 1]);
 
         drop(data);
         output_buffer.unmap();
@@ -348,7 +350,11 @@ mod tests {
 
         let texture_desc = wgpu::TextureDescriptor {
             label: Some("target_texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -362,7 +368,11 @@ mod tests {
         // Create Red and Blue 1x1 source textures
         let src_texture_desc = wgpu::TextureDescriptor {
             label: Some("src_texture"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -372,17 +382,43 @@ mod tests {
         };
         let red_texture = device.create_texture(&src_texture_desc);
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &red_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &red_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &[255, 0, 0, 255],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let blue_texture = device.create_texture(&src_texture_desc);
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &blue_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &blue_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &[0, 0, 255, 255],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
 
         // Render Red at (0,0) 100x100, then Blue at (50,50) 100x100 (Blue should be on top)
@@ -408,35 +444,47 @@ mod tests {
             target_texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &output_buffer,
-                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(height) },
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit(std::iter::once(encoder.finish()));
 
         let buffer_slice = output_buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| { tx.send(result).unwrap(); });
-        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll failed");
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll failed");
         rx.recv().unwrap().expect("map failed");
 
         let data = buffer_slice.get_mapped_range();
-        
+
         // (25, 25) should be Red [255, 0, 0, 255]
         let off = ((25 * width + 25) * 4) as usize;
-        assert_eq!(data[off..off+4], [255, 0, 0, 255]);
+        assert_eq!(data[off..off + 4], [255, 0, 0, 255]);
 
         // (75, 75) should be Blue [0, 0, 255, 255] (overlap area)
         let off = ((75 * width + 75) * 4) as usize;
-        assert_eq!(data[off..off+4], [0, 0, 255, 255]);
+        assert_eq!(data[off..off + 4], [0, 0, 255, 255]);
 
         // (125, 125) should be Blue [0, 0, 255, 255]
         let off = ((125 * width + 125) * 4) as usize;
-        assert_eq!(data[off..off+4], [0, 0, 255, 255]);
+        assert_eq!(data[off..off + 4], [0, 0, 255, 255]);
 
         // (200, 200) should be Black [0, 0, 0, 1]
         let off = ((200 * width + 200) * 4) as usize;
-        assert_eq!(data[off..off+4], [0, 0, 0, 1]);
+        assert_eq!(data[off..off + 4], [0, 0, 0, 1]);
 
         drop(data);
         output_buffer.unmap();

@@ -1,6 +1,6 @@
 mod compositor;
-mod xdg_shell;
 mod dmabuf;
+mod xdg_shell;
 
 use crate::Smallvil;
 
