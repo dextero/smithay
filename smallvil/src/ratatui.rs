@@ -154,6 +154,56 @@ pub fn init_ratatui(
                         let _ = std::io::stdout().flush();
 
                         if !ansi_string.is_empty() {
+                            // Save screenshot before exiting
+                            let (width, height) = (screen_size.w as u32, screen_size.h as u32);
+                            let buffer_size = (width * height * 4) as wgpu::BufferAddress;
+                            let output_buffer = wgpu_device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("screenshot_buffer"),
+                                size: buffer_size,
+                                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                                mapped_at_creation: false,
+                            });
+
+                            let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("screenshot_encoder"),
+                            });
+                            encoder.copy_texture_to_buffer(
+                                screen_texture.as_image_copy(),
+                                wgpu::TexelCopyBufferInfo {
+                                    buffer: &output_buffer,
+                                    layout: wgpu::TexelCopyBufferLayout {
+                                        offset: 0,
+                                        bytes_per_row: Some(width * 4),
+                                        rows_per_image: Some(height),
+                                    },
+                                },
+                                wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                            wgpu_queue.submit(std::iter::once(encoder.finish()));
+
+                            let buffer_slice = output_buffer.slice(..);
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+                                tx.send(result).unwrap();
+                            });
+                            let _ = wgpu_device.poll(wgpu::PollType::wait_indefinitely());
+                            rx.recv().unwrap().unwrap();
+
+                            let data = buffer_slice.get_mapped_range();
+                            image::save_buffer(
+                                "/tmp/screenshot.png",
+                                &data,
+                                width,
+                                height,
+                                image::ExtendedColorType::Rgba8,
+                            ).expect("Failed to save screenshot");
+                            drop(data);
+                            output_buffer.unmap();
+
                             std::process::exit(0);
                         }
 
