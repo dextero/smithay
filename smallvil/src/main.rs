@@ -7,6 +7,8 @@ mod input;
 mod state;
 mod winit;
 mod ratatui;
+mod gpu_renderer;
+mod vulkan_import;
 
 use smithay::reexports::{
     calloop::EventLoop,

@@ -1,20 +1,22 @@
 use std::time::Duration;
+use std::sync::Arc;
+use std::io::Write;
 
 use smithay::{
     backend::{
         input::InputEvent,
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
-        renderer::{
-            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement,
-            ratatui::RatatuiRenderer, Color32F,
-        },
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::Transform,
+    utils::{Transform, Size},
+    wayland::compositor::with_states,
 };
 
 use crate::{CalloopData, Smallvil};
+use crate::gpu_renderer::GpuRenderer;
+use crate::vulkan_import::VulkanImport;
+use gpu_ansi_encoder::GpuAnsiEncoder;
 
 pub fn init_ratatui(
     event_loop: &mut EventLoop<CalloopData>,
@@ -31,12 +33,12 @@ pub fn init_ratatui(
     };
 
     let output = Output::new(
-        "winit".to_string(),
+        "ratatui".to_string(),
         PhysicalProperties {
             size: (0, 0).into(),
             subpixel: Subpixel::Unknown,
             make: "Smithay".into(),
-            model: "Ratatui".into(),
+            model: "GpuRatatui".into(),
         },
     );
     let _global = output.create_global::<Smallvil>(display_handle);
@@ -45,14 +47,30 @@ pub fn init_ratatui(
 
     state.space.map_output(&output, (0, 0));
 
-    let mut damage_tracker = OutputDamageTracker::from_output(&output);
+    // WGPU Initialization
+    let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::VULKAN,
+        ..Default::default()
+    });
+    let adapter = pollster::block_on(wgpu_instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    let (wgpu_device, wgpu_queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let wgpu_device = Arc::new(wgpu_device);
+    let wgpu_queue = Arc::new(wgpu_queue);
+
+    let ansi_encoder = pollster::block_on(GpuAnsiEncoder::new(wgpu_device.clone(), wgpu_queue.clone())).unwrap();
+    let gpu_renderer = GpuRenderer::new(wgpu_device.clone(), wgpu_queue.clone());
+    
+    // Get raw Vulkan device for imports
+    let ash_device = unsafe {
+        wgpu_device.as_hal::<wgpu_hal::api::Vulkan>()
+            .map(|d| d.raw_device().clone())
+            .expect("Failed to get Vulkan device from wgpu")
+    };
+    let vulkan_import = VulkanImport::new(Arc::new(ash_device));
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    let term_size = backend.renderer().terminal_size();
-    eprintln!("window size: {term_size:?}");
-    let mut framebuffer = Some(backend.renderer().new_framebuffer());
-
+    let mut previous_texture: Option<wgpu::Texture> = None;
     let mut frames = 0;
     let mut render_start = std::time::Instant::now();
 
@@ -80,23 +98,49 @@ pub fn init_ratatui(
                             render_start = std::time::Instant::now();
                         }
 
-                        smithay::desktop::space::render_output::<
-                            _,
-                            WaylandSurfaceRenderElement<RatatuiRenderer>,
-                            _,
-                            _,
-                        >(
-                            &output,
-                            backend.renderer(),
-                            framebuffer.as_mut().unwrap(),
-                            1.0,
-                            0,
-                            [&state.space],
-                            &[],
-                            &mut damage_tracker,
-                            Color32F::BLACK,
-                        )
-                        .unwrap();
+                        // Composite scene into a texture
+                        let screen_size = output.current_mode().unwrap().size;
+                        let screen_desc = wgpu::TextureDescriptor {
+                            label: Some("screen_texture"),
+                            size: wgpu::Extent3d {
+                                width: screen_size.w as u32,
+                                height: screen_size.h as u32,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Uint,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                            view_formats: &[],
+                        };
+                        let screen_texture = wgpu_device.create_texture(&screen_desc);
+                        let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        let mut windows_to_render = Vec::new();
+                        state.space.elements().for_each(|window| {
+                            let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
+                            let location = state.space.element_location(window).unwrap();
+                            
+                            with_states(surface, |surface_data| {
+                                let surface_state = surface_data.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>().unwrap().lock().unwrap();
+                                if let Some(buffer) = surface_state.buffer() {
+                                    if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
+                                        let texture = unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
+                                        windows_to_render.push((texture, location, window.geometry().size));
+                                    }
+                                }
+                            });
+                        });
+
+                        gpu_renderer.render_scene(&screen_view, Size::from((screen_size.w, screen_size.h)), &windows_to_render);
+
+                        // Encode to ANSI and print
+                        let ansi_string = pollster::block_on(ansi_encoder.ansi_from_texture(previous_texture.as_ref(), &screen_texture)).unwrap();
+                        print!("{ansi_string}");
+                        let _ = std::io::stdout().flush();
+
+                        previous_texture = Some(screen_texture);
 
                         state.space.elements().for_each(|window| {
                             window.send_frame(
@@ -121,6 +165,7 @@ pub fn init_ratatui(
                             None,
                             None,
                         );
+                        previous_texture = None; // Reset diffing on resize
                     }
                     event @ RatatuiEvent::Key { .. } => {
                         state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
@@ -145,7 +190,6 @@ pub fn init_ratatui(
                                 InputEvent::PointerAxis { event: e }
                             }
                         };
-                        tracing::trace!("event: {event:?}");
                         state.process_input_event::<RatatuiInputBackend>(event);
                     }
                 }
