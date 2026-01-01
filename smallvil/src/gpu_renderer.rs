@@ -1,6 +1,6 @@
+use smithay::utils::{Logical, Point, Size};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use smithay::utils::{Point, Size, Logical};
 
 pub struct GpuRenderer {
     device: Arc<wgpu::Device>,
@@ -108,9 +108,11 @@ impl GpuRenderer {
         screen_size: Size<i32, Logical>,
         windows: &[(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)],
     ) {
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -138,12 +140,30 @@ impl GpuRenderer {
                 let y2 = 1.0 - ((pos.y + size.h) as f32 / screen_size.h as f32) * 2.0;
 
                 let vertices = [
-                    Vertex { position: [x1, y1], tex_coords: [0.0, 0.0] },
-                    Vertex { position: [x1, y2], tex_coords: [0.0, 1.0] },
-                    Vertex { position: [x2, y1], tex_coords: [1.0, 0.0] },
-                    Vertex { position: [x2, y1], tex_coords: [1.0, 0.0] },
-                    Vertex { position: [x1, y2], tex_coords: [0.0, 1.0] },
-                    Vertex { position: [x2, y2], tex_coords: [1.0, 1.0] },
+                    Vertex {
+                        position: [x1, y1],
+                        tex_coords: [0.0, 0.0],
+                    },
+                    Vertex {
+                        position: [x1, y2],
+                        tex_coords: [0.0, 1.0],
+                    },
+                    Vertex {
+                        position: [x2, y1],
+                        tex_coords: [1.0, 0.0],
+                    },
+                    Vertex {
+                        position: [x2, y1],
+                        tex_coords: [1.0, 0.0],
+                    },
+                    Vertex {
+                        position: [x1, y2],
+                        tex_coords: [0.0, 1.0],
+                    },
+                    Vertex {
+                        position: [x2, y2],
+                        tex_coords: [1.0, 1.0],
+                    },
                 ];
 
                 let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

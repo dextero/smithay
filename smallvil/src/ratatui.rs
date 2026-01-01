@@ -1,6 +1,6 @@
-use std::time::Duration;
-use std::sync::Arc;
 use std::io::Write;
+use std::sync::Arc;
+use std::time::Duration;
 
 use smithay::{
     backend::{
@@ -9,13 +9,13 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::calloop::EventLoop,
-    utils::{Transform, Size, Physical},
+    utils::{Physical, Size, Transform},
     wayland::compositor::with_states,
 };
 
-use crate::{CalloopData, Smallvil};
 use crate::gpu_renderer::GpuRenderer;
 use crate::vulkan_import::VulkanImport;
+use crate::{CalloopData, Smallvil};
 use gpu_ansi_encoder::GpuAnsiEncoder;
 
 pub fn init_ratatui(
@@ -52,23 +52,28 @@ pub fn init_ratatui(
         backends: wgpu::Backends::VULKAN,
         ..Default::default()
     });
-    let adapter = pollster::block_on(wgpu_instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
-    let (wgpu_device, wgpu_queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let adapter =
+        pollster::block_on(wgpu_instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+    let (wgpu_device, wgpu_queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
     let wgpu_device = Arc::new(wgpu_device);
     let wgpu_queue = Arc::new(wgpu_queue);
 
-    let ansi_encoder = pollster::block_on(GpuAnsiEncoder::new(wgpu_device.clone(), wgpu_queue.clone())).unwrap();
+    let ansi_encoder =
+        pollster::block_on(GpuAnsiEncoder::new(wgpu_device.clone(), wgpu_queue.clone())).unwrap();
     let gpu_renderer = GpuRenderer::new(wgpu_device.clone(), wgpu_queue.clone());
-    
+
     // Get raw Vulkan device for imports
     let ash_instance = unsafe {
-        wgpu_instance.as_hal::<wgpu_hal::api::Vulkan>()
+        wgpu_instance
+            .as_hal::<wgpu_hal::api::Vulkan>()
             .expect("Failed to get Vulkan instance from wgpu")
             .shared_instance()
             .raw_instance()
     };
     let (ash_device, ash_pdev) = unsafe {
-        wgpu_device.as_hal::<wgpu_hal::api::Vulkan>()
+        wgpu_device
+            .as_hal::<wgpu_hal::api::Vulkan>()
             .map(|d| (d.raw_device().clone(), d.raw_physical_device()))
             .expect("Failed to get Vulkan device from wgpu")
     };
@@ -107,8 +112,12 @@ pub fn init_ratatui(
 
                         // Composite scene into a texture
                         let screen_size = output.current_mode().unwrap().size;
-                        
-                        if current_screen_texture.as_ref().map(|(_, _, size)| *size != screen_size).unwrap_or(true) {
+
+                        if current_screen_texture
+                            .as_ref()
+                            .map(|(_, _, size)| *size != screen_size)
+                            .unwrap_or(true)
+                        {
                             let screen_desc = wgpu::TextureDescriptor {
                                 label: Some("screen_texture"),
                                 size: wgpu::Extent3d {
@@ -120,7 +129,9 @@ pub fn init_ratatui(
                                 sample_count: 1,
                                 dimension: wgpu::TextureDimension::D2,
                                 format: wgpu::TextureFormat::Rgba8Uint,
-                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                    | wgpu::TextureUsages::TEXTURE_BINDING
+                                    | wgpu::TextureUsages::COPY_SRC,
                                 view_formats: &[],
                             };
                             let tex = wgpu_device.create_texture(&screen_desc);
@@ -134,22 +145,35 @@ pub fn init_ratatui(
                         state.space.elements().for_each(|window| {
                             let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
                             let location = state.space.element_location(window).unwrap();
-                            
+
                             with_states(surface, |surface_data| {
-                                let surface_state = surface_data.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>().unwrap().lock().unwrap();
+                                let surface_state = surface_data
+                                    .data_map
+                                    .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+                                    .unwrap()
+                                    .lock()
+                                    .unwrap();
                                 if let Some(buffer) = surface_state.buffer() {
                                     if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
-                                        let texture = unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
+                                        let texture =
+                                            unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
                                         windows_to_render.push((texture, location, window.geometry().size));
                                     }
                                 }
                             });
                         });
 
-                        gpu_renderer.render_scene(screen_view, Size::from((screen_size.w, screen_size.h)), &windows_to_render);
+                        gpu_renderer.render_scene(
+                            screen_view,
+                            Size::from((screen_size.w, screen_size.h)),
+                            &windows_to_render,
+                        );
 
                         // Encode to ANSI and print
-                        let ansi_string = pollster::block_on(ansi_encoder.ansi_from_texture(previous_texture.as_ref(), screen_texture)).unwrap();
+                        let ansi_string = pollster::block_on(
+                            ansi_encoder.ansi_from_texture(previous_texture.as_ref(), screen_texture),
+                        )
+                        .unwrap();
                         print!("{}", &*ansi_string);
                         let _ = std::io::stdout().flush();
 
@@ -164,9 +188,10 @@ pub fn init_ratatui(
                                 mapped_at_creation: false,
                             });
 
-                            let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("screenshot_encoder"),
-                            });
+                            let mut encoder =
+                                wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("screenshot_encoder"),
+                                });
                             encoder.copy_texture_to_buffer(
                                 screen_texture.as_image_copy(),
                                 wgpu::TexelCopyBufferInfo {
@@ -208,7 +233,8 @@ pub fn init_ratatui(
                                     width,
                                     height,
                                     image::ExtendedColorType::Rgba8,
-                                ).expect("Failed to save screenshot");
+                                )
+                                .expect("Failed to save screenshot");
                                 drop(data);
                                 output_buffer.unmap();
 
@@ -221,10 +247,10 @@ pub fn init_ratatui(
                         // We need a persistent copy for diffing if current_screen_texture is repurposed
                         // Actually, GpuAnsiEncoder diffs current against previous.
                         // If we reuse screen_texture, we must clone it or copy it.
-                        // For now, let's keep it simple and just clone the texture handle if possible, 
+                        // For now, let's keep it simple and just clone the texture handle if possible,
                         // but wgpu::Texture is just a handle. The content changes.
                         // So we MUST have a separate "previous" texture with copied content.
-                        
+
                         let prev_tex = if let Some(ref prev) = previous_texture {
                             if prev.size() == screen_texture.size() {
                                 prev.clone()
@@ -236,7 +262,8 @@ pub fn init_ratatui(
                                     sample_count: 1,
                                     dimension: wgpu::TextureDimension::D2,
                                     format: wgpu::TextureFormat::Rgba8Uint,
-                                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                        | wgpu::TextureUsages::COPY_DST,
                                     view_formats: &[],
                                 };
                                 wgpu_device.create_texture(&desc)
@@ -255,14 +282,17 @@ pub fn init_ratatui(
                             wgpu_device.create_texture(&desc)
                         };
 
-                        let mut encoder = wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("copy_to_prev") });
+                        let mut encoder =
+                            wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                label: Some("copy_to_prev"),
+                            });
                         encoder.copy_texture_to_texture(
                             screen_texture.as_image_copy(),
                             prev_tex.as_image_copy(),
-                            screen_texture.size()
+                            screen_texture.size(),
                         );
                         wgpu_queue.submit(std::iter::once(encoder.finish()));
-                        
+
                         previous_texture = Some(prev_tex);
 
                         state.space.elements().for_each(|window| {

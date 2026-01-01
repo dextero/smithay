@@ -2,13 +2,13 @@
 
 mod handlers;
 
+mod gpu_renderer;
 mod grabs;
 mod input;
-mod state;
-mod winit;
 mod ratatui;
-mod gpu_renderer;
+mod state;
 mod vulkan_import;
+mod winit;
 
 use smithay::reexports::{
     calloop::EventLoop,
@@ -24,11 +24,12 @@ pub struct CalloopData {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-        tracing_subscriber::fmt().with_writer(std::io::stderr).with_env_filter(env_filter).init();
-    } else {
         tracing_subscriber::fmt()
-        .with_writer(std::io::stderr
-        ).init();
+            .with_writer(std::io::stderr)
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     }
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
