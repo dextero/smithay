@@ -7,7 +7,7 @@ use smithay::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
     utils::SERIAL_COUNTER,
 };
 
@@ -19,6 +19,8 @@ impl Smallvil {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
+
+                eprintln!("Processing Keyboard Input: key_code={:?}, state={:?}", event.key_code(), event.state());
 
                 self.seat.get_keyboard().unwrap().input::<(), _>(
                     self,
@@ -42,6 +44,8 @@ impl Smallvil {
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let under = self.surface_under(pos);
+                
+                eprintln!("Pointer Motion Absolute: pos={:?}, under={:?}", pos, under.as_ref().map(|(s, _)| s.id()));
 
                 pointer.motion(
                     self,
@@ -63,6 +67,8 @@ impl Smallvil {
                 let button = event.button_code();
 
                 let button_state = event.state();
+                
+                eprintln!("Pointer Button: button={:?}, state={:?}, pos={:?}", button, button_state, pointer.current_location());
 
                 if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
                     if let Some((window, _loc)) = self
@@ -70,6 +76,7 @@ impl Smallvil {
                         .element_under(pointer.current_location())
                         .map(|(w, l)| (w.clone(), l))
                     {
+                        eprintln!("Focusing window: {:?}", window);
                         self.space.raise_element(&window, true);
                         keyboard.set_focus(
                             self,
@@ -80,6 +87,7 @@ impl Smallvil {
                             window.toplevel().unwrap().send_pending_configure();
                         });
                     } else {
+                        eprintln!("Click on empty space, clearing focus");
                         self.space.elements().for_each(|window| {
                             window.set_activated(false);
                             window.toplevel().unwrap().send_pending_configure();

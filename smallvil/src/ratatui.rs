@@ -9,8 +9,8 @@ use smithay::{
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    reexports::{calloop::EventLoop, wayland_server::protocol::wl_shm},
-    utils::{Physical, Size, Transform},
+    reexports::{calloop::EventLoop, wayland_server::protocol::wl_shm, wayland_server::DisplayHandle},
+    utils::{Logical, Physical, Point, Size, Transform},
     wayland::{compositor::with_states, shm},
 };
 
@@ -19,6 +19,284 @@ use crate::vulkan_import::VulkanImport;
 use crate::{CalloopData, Smallvil};
 use gpu_ansi_encoder::GpuAnsiEncoder;
 
+struct RatatuiHandler {
+    wgpu_device: Arc<wgpu::Device>,
+    wgpu_queue: Arc<wgpu::Queue>,
+    ansi_encoder: GpuAnsiEncoder,
+    gpu_renderer: GpuRenderer,
+    vulkan_import: VulkanImport,
+    output: Output,
+    backend: ratatui::RatatuiBackend,
+
+    previous_texture: Option<wgpu::Texture>,
+    current_screen_texture: Option<(wgpu::Texture, wgpu::TextureView, Size<i32, Physical>)>,
+    frames: u32,
+    render_start: std::time::Instant,
+}
+
+impl RatatuiHandler {
+    fn redraw(&mut self, state: &mut Smallvil, display: &mut DisplayHandle) {
+        self.frames += 1;
+        if self.frames >= 60 {
+            let render_end = std::time::Instant::now();
+            eprintln!(
+                "FPS = {}",
+                self.frames as f64 / render_end.duration_since(self.render_start).as_secs_f64()
+            );
+            self.frames = 0;
+            self.render_start = std::time::Instant::now();
+        }
+
+        // Composite scene into a texture
+        let screen_size = self.output.current_mode().unwrap().size;
+
+        if self
+            .current_screen_texture
+            .as_ref()
+            .map(|(_, _, size)| *size != screen_size)
+            .unwrap_or(true)
+        {
+            let screen_desc = wgpu::TextureDescriptor {
+                label: Some("screen_texture"),
+                size: wgpu::Extent3d {
+                    width: screen_size.w as u32,
+                    height: screen_size.h as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Uint,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[wgpu::TextureFormat::Rgba8Uint],
+            };
+            let tex = self.wgpu_device.create_texture(&screen_desc);
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.current_screen_texture = Some((tex, view, screen_size));
+        }
+
+        let mut windows_to_render = Vec::new();
+        state.space.elements().for_each(|window| {
+            if let Err(e) = self.import_window(state, window, &mut windows_to_render) {
+                eprintln!("failed to import window: {:#?}", e);
+            }
+        });
+
+        let (screen_texture, screen_view, _) = self.current_screen_texture.as_ref().unwrap();
+
+        self.gpu_renderer.render_scene(
+            screen_view,
+            Size::from((screen_size.w, screen_size.h)),
+            &windows_to_render,
+        );
+
+        // Encode to ANSI and print
+        let ansi_string = pollster::block_on(
+            self.ansi_encoder
+                .ansi_from_texture(self.previous_texture.as_ref(), screen_texture),
+        )
+        .unwrap();
+        print!("{}", &*ansi_string);
+        let _ = std::io::stdout().flush();
+
+        state.space.elements().for_each(|window| {
+            window.send_frame(
+                &self.output,
+                state.start_time.elapsed(),
+                Some(Duration::ZERO),
+                |_, _| Some(self.output.clone()),
+            )
+        });
+
+        state.space.refresh();
+        state.popups.cleanup();
+        let _ = display.flush_clients();
+
+        // Release the borrow of screen_texture before calling update_previous_texture
+        if let Some((screen_texture, _, _)) = self.current_screen_texture.as_ref() {
+            let screen_texture = screen_texture.clone();
+            self.update_previous_texture(&screen_texture);
+        }
+    }
+
+    fn import_window(
+        &self,
+        state: &Smallvil,
+        window: &smithay::desktop::Window,
+        windows_to_render: &mut Vec<(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)>,
+    ) -> anyhow::Result<()> {
+        let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
+        let window_size = window.geometry().size;
+
+        let Some(location) = state.space.element_location(window) else {
+            bail!("{:#?} has no location in {:#?}", window, state.space);
+        };
+
+        with_states(surface, |surface_data| -> anyhow::Result<()> {
+            let surface_state = surface_data
+                .data_map
+                .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+                .unwrap()
+                .lock()
+                .unwrap();
+            let Some(buffer) = surface_state.buffer() else {
+                bail!("window has no surface buffer");
+            };
+            let texture = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
+                unsafe { self.vulkan_import.import_dmabuf(&self.wgpu_device, &dmabuf) }
+            } else if let Ok(shm_texture) = shm::with_buffer_contents(buffer, |ptr, _len, data| {
+                let offset = data.offset as usize;
+                let stride = data.stride as usize;
+                let height = data.height as usize;
+                let width = data.width as usize;
+
+                let size = wgpu::Extent3d {
+                    width: width as u32,
+                    height: height as u32,
+                    depth_or_array_layers: 1,
+                };
+
+                let wgpu_format = match data.format {
+                    wl_shm::Format::Argb8888 => wgpu::TextureFormat::Bgra8Unorm,
+                    wl_shm::Format::Xrgb8888 => wgpu::TextureFormat::Bgra8Unorm,
+                    wl_shm::Format::Abgr8888 => wgpu::TextureFormat::Rgba8Unorm,
+                    wl_shm::Format::Xbgr8888 => wgpu::TextureFormat::Rgba8Unorm,
+                    _ => wgpu::TextureFormat::Rgba8Unorm,
+                };
+
+                let texture = self.wgpu_device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("shm_texture"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu_format,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[wgpu_format],
+                });
+
+                let data_ptr = unsafe { ptr.add(offset) };
+                let data_slice = unsafe { std::slice::from_raw_parts(data_ptr, stride * height) };
+
+                self.wgpu_queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    data_slice,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(stride as u32),
+                        rows_per_image: Some(height as u32),
+                    },
+                    size,
+                );
+                texture
+            }) {
+                shm_texture
+            } else {
+                bail!("window has no dmabuf and shm failed");
+            };
+            windows_to_render.push((texture, location, window_size));
+            Ok(())
+        })
+    }
+
+    fn update_previous_texture(&mut self, screen_texture: &wgpu::Texture) {
+        let prev_tex = if let Some(ref prev) = self.previous_texture {
+            if prev.size() == screen_texture.size() {
+                prev.clone()
+            } else {
+                let desc = wgpu::TextureDescriptor {
+                    label: Some("previous_texture"),
+                    size: screen_texture.size(),
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Uint,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                };
+                self.wgpu_device.create_texture(&desc)
+            }
+        } else {
+            let desc = wgpu::TextureDescriptor {
+                label: Some("previous_texture"),
+                size: screen_texture.size(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Uint,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            };
+            self.wgpu_device.create_texture(&desc)
+        };
+
+        let mut encoder =
+            self.wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("copy_to_prev"),
+            });
+        encoder.copy_texture_to_texture(
+            screen_texture.as_image_copy(),
+            prev_tex.as_image_copy(),
+            screen_texture.size(),
+        );
+        self.wgpu_queue.submit(std::iter::once(encoder.finish()));
+
+        self.previous_texture = Some(prev_tex);
+    }
+
+    fn handle_event(&mut self, event: RatatuiEvent, state: &mut Smallvil, display: &mut DisplayHandle) {
+        match event {
+            RatatuiEvent::Redraw => {
+                self.redraw(state, display);
+            }
+            RatatuiEvent::Resize(_, _) => {
+                self.output.change_current_state(
+                    Some(Mode {
+                        size: self.backend.window_size(),
+                        refresh: 60_000,
+                    }),
+                    None,
+                    None,
+                    None,
+                );
+                self.previous_texture = None; // Reset diffing on resize
+            }
+            event @ RatatuiEvent::Key { .. } => {
+                eprintln!("Ratatui Key Event: {:?}", event);
+                state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
+                    event: event.into(),
+                });
+            }
+            RatatuiEvent::Mouse(event) => {
+                eprintln!("Ratatui Mouse Event: {:?}", event);
+                let e = RatatuiMouseEvent::new(event, self.backend.window_size());
+                let event = match event.kind {
+                    crossterm::event::MouseEventKind::Down(_)
+                    | crossterm::event::MouseEventKind::Up(_) => InputEvent::PointerButton { event: e },
+                    crossterm::event::MouseEventKind::Drag(_)
+                    | crossterm::event::MouseEventKind::Moved => {
+                        InputEvent::PointerMotionAbsolute { event: e }
+                    }
+                    crossterm::event::MouseEventKind::ScrollDown
+                    | crossterm::event::MouseEventKind::ScrollUp
+                    | crossterm::event::MouseEventKind::ScrollLeft
+                    | crossterm::event::MouseEventKind::ScrollRight => {
+                        InputEvent::PointerAxis { event: e }
+                    }
+                };
+                state.process_input_event::<RatatuiInputBackend>(event);
+            }
+        }
+    }
+}
+
 pub fn init_ratatui(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
@@ -26,7 +304,7 @@ pub fn init_ratatui(
     let display_handle = &mut data.display_handle;
     let state = &mut data.state;
 
-    let mut backend = ratatui::RatatuiBackend::new()?;
+    let backend = ratatui::RatatuiBackend::new()?;
 
     let mode = Mode {
         size: backend.window_size(),
@@ -82,277 +360,28 @@ pub fn init_ratatui(
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
-    let mut previous_texture: Option<wgpu::Texture> = None;
-    let mut current_screen_texture: Option<(wgpu::Texture, wgpu::TextureView, Size<i32, Physical>)> = None;
-    let mut frames = 0;
-    let mut render_start = std::time::Instant::now();
+    let mut handler = RatatuiHandler {
+        wgpu_device,
+        wgpu_queue,
+        ansi_encoder,
+        gpu_renderer,
+        vulkan_import,
+        output,
+        backend,
+        previous_texture: None,
+        current_screen_texture: None,
+        frames: 0,
+        render_start: std::time::Instant::now(),
+    };
 
-    let output = output.clone();
     event_loop
         .handle()
         .insert_source(
-            backend.event_source(Duration::from_micros(
+            handler.backend.event_source(Duration::from_micros(
                 1_000_000_000 / u64::try_from(mode.refresh).unwrap(),
             )),
             move |event, _, data| {
-                let display = &mut data.display_handle;
-                let state = &mut data.state;
-
-                match event {
-                    RatatuiEvent::Redraw => {
-                        frames += 1;
-                        if frames >= 60 {
-                            let render_end = std::time::Instant::now();
-                            eprintln!(
-                                "FPS = {}",
-                                frames as f64 / render_end.duration_since(render_start).as_secs_f64()
-                            );
-                            frames = 0;
-                            render_start = std::time::Instant::now();
-                        }
-
-                        // Composite scene into a texture
-                        let screen_size = output.current_mode().unwrap().size;
-
-                        if current_screen_texture
-                            .as_ref()
-                            .map(|(_, _, size)| *size != screen_size)
-                            .unwrap_or(true)
-                        {
-                            let screen_desc = wgpu::TextureDescriptor {
-                                label: Some("screen_texture"),
-                                size: wgpu::Extent3d {
-                                    width: screen_size.w as u32,
-                                    height: screen_size.h as u32,
-                                    depth_or_array_layers: 1,
-                                },
-                                mip_level_count: 1,
-                                sample_count: 1,
-                                dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::Rgba8Uint,
-                                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                    | wgpu::TextureUsages::TEXTURE_BINDING
-                                    | wgpu::TextureUsages::COPY_SRC,
-                                view_formats: &[wgpu::TextureFormat::Rgba8Uint],
-                            };
-                            let tex = wgpu_device.create_texture(&screen_desc);
-                            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-                            current_screen_texture = Some((tex, view, screen_size));
-                        }
-
-                        let (screen_texture, screen_view, _) = current_screen_texture.as_ref().unwrap();
-
-                        let mut windows_to_render = Vec::new();
-                        state.space.elements().for_each(|window| {
-                            let mut try_render = || -> anyhow::Result<()> {
-                                let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
-                                // with_states does some locking. We need to get the size in advance.
-                                let window_size = window.geometry().size;
-
-                                let Some(location) = state.space.element_location(window) else {
-                                    bail!("{:#?} has no location in {:#?}", window, state.space);
-                                };
-
-                                with_states(surface, |surface_data| -> anyhow::Result<()> {
-                                    let surface_state = surface_data
-                                        .data_map
-                                        .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
-                                        .unwrap()
-                                        .lock()
-                                        .unwrap();
-                                    let Some(buffer) = surface_state.buffer() else {
-                                        bail!("window has no surface buffer");
-                                    };
-                                    let texture = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
-                                        unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) }
-                                    } else if let Ok(shm_texture) = shm::with_buffer_contents(buffer, |ptr, _len, data| {
-                                        let offset = data.offset as usize;
-                                        let stride = data.stride as usize;
-                                        let height = data.height as usize;
-                                        let width = data.width as usize;
-                                        eprintln!("import shm texture, offset {offset}, stride {stride}, size {width}x{height}");
-
-                                        let size = wgpu::Extent3d {
-                                            width: width as u32,
-                                            height: height as u32,
-                                            depth_or_array_layers: 1,
-                                        };
-
-                                        let wgpu_format = match data.format {
-                                            wl_shm::Format::Argb8888 => wgpu::TextureFormat::Bgra8Unorm,
-                                            wl_shm::Format::Xrgb8888 => wgpu::TextureFormat::Bgra8Unorm,
-                                            wl_shm::Format::Abgr8888 => wgpu::TextureFormat::Rgba8Unorm,
-                                            wl_shm::Format::Xbgr8888 => wgpu::TextureFormat::Rgba8Unorm,
-                                            _ => wgpu::TextureFormat::Rgba8Unorm,
-                                        };
-
-                                        let texture = wgpu_device.create_texture(&wgpu::TextureDescriptor {
-                                            label: Some("shm_texture"),
-                                            size,
-                                            mip_level_count: 1,
-                                            sample_count: 1,
-                                            dimension: wgpu::TextureDimension::D2,
-                                            format: wgpu_format,
-                                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                                            view_formats: &[wgpu_format],
-                                        });
-
-                                        let data_ptr = unsafe { ptr.add(offset) };
-                                        let data_slice = unsafe { std::slice::from_raw_parts(data_ptr, stride * height) };
-
-                                        wgpu_queue.write_texture(
-                                            wgpu::TexelCopyTextureInfo {
-                                                texture: &texture,
-                                                mip_level: 0,
-                                                origin: wgpu::Origin3d::ZERO,
-                                                aspect: wgpu::TextureAspect::All,
-                                            },
-                                            data_slice,
-                                            wgpu::TexelCopyBufferLayout {
-                                                offset: 0,
-                                                bytes_per_row: Some(stride as u32),
-                                                rows_per_image: Some(height as u32),
-                                            },
-                                            size,
-                                        );
-                                        eprintln!("texture written");
-                                        texture
-                                    }) {
-                                        shm_texture
-                                    } else {
-                                        bail!("window has no dmabuf and shm failed");
-                                    };
-                                    eprintln!("push?");
-                                    windows_to_render.push((texture, location, window_size));
-                                    eprintln!("push!");
-                                    Ok(())
-                                })?;
-                                Ok(())
-                            };
-
-                            eprintln!("wat");
-
-                            if let Err(e) = try_render() {
-                                eprintln!("failed to render window: {:#?}", e);
-                            }
-                        });
-
-                        gpu_renderer.render_scene(
-                            screen_view,
-                            Size::from((screen_size.w, screen_size.h)),
-                            &windows_to_render,
-                        );
-
-                        // Encode to ANSI and print
-                        let ansi_string = pollster::block_on(
-                            ansi_encoder.ansi_from_texture(previous_texture.as_ref(), screen_texture),
-                        )
-                        .unwrap();
-                        print!("{}", &*ansi_string);
-                        let _ = std::io::stdout().flush();
-
-                        // We need a persistent copy for diffing if current_screen_texture is repurposed
-                        // Actually, GpuAnsiEncoder diffs current against previous.
-                        // If we reuse screen_texture, we must clone it or copy it.
-                        // For now, let's keep it simple and just clone the texture handle if possible,
-                        // but wgpu::Texture is just a handle. The content changes.
-                        // So we MUST have a separate "previous" texture with copied content.
-
-                        let prev_tex = if let Some(ref prev) = previous_texture {
-                            if prev.size() == screen_texture.size() {
-                                prev.clone()
-                            } else {
-                                let desc = wgpu::TextureDescriptor {
-                                    label: Some("previous_texture"),
-                                    size: screen_texture.size(),
-                                    mip_level_count: 1,
-                                    sample_count: 1,
-                                    dimension: wgpu::TextureDimension::D2,
-                                    format: wgpu::TextureFormat::Rgba8Uint,
-                                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                                        | wgpu::TextureUsages::COPY_DST,
-                                    view_formats: &[],
-                                };
-                                wgpu_device.create_texture(&desc)
-                            }
-                        } else {
-                            let desc = wgpu::TextureDescriptor {
-                                label: Some("previous_texture"),
-                                size: screen_texture.size(),
-                                mip_level_count: 1,
-                                sample_count: 1,
-                                dimension: wgpu::TextureDimension::D2,
-                                format: wgpu::TextureFormat::Rgba8Uint,
-                                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                                view_formats: &[],
-                            };
-                            wgpu_device.create_texture(&desc)
-                        };
-
-                        let mut encoder =
-                            wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                label: Some("copy_to_prev"),
-                            });
-                        encoder.copy_texture_to_texture(
-                            screen_texture.as_image_copy(),
-                            prev_tex.as_image_copy(),
-                            screen_texture.size(),
-                        );
-                        wgpu_queue.submit(std::iter::once(encoder.finish()));
-
-                        previous_texture = Some(prev_tex);
-
-                        state.space.elements().for_each(|window| {
-                            window.send_frame(
-                                &output,
-                                state.start_time.elapsed(),
-                                Some(Duration::ZERO),
-                                |_, _| Some(output.clone()),
-                            )
-                        });
-
-                        state.space.refresh();
-                        state.popups.cleanup();
-                        let _ = display.flush_clients();
-                    }
-                    RatatuiEvent::Resize(_, _) => {
-                        output.change_current_state(
-                            Some(Mode {
-                                size: backend.renderer().window_size(),
-                                refresh: 60_000,
-                            }),
-                            None,
-                            None,
-                            None,
-                        );
-                        previous_texture = None; // Reset diffing on resize
-                    }
-                    event @ RatatuiEvent::Key { .. } => {
-                        state.process_input_event::<RatatuiInputBackend>(InputEvent::Keyboard {
-                            event: event.into(),
-                        });
-                    }
-                    RatatuiEvent::Mouse(event) => {
-                        let e = RatatuiMouseEvent::new(event, backend.window_size());
-                        let event = match event.kind {
-                            crossterm::event::MouseEventKind::Down(_)
-                            | crossterm::event::MouseEventKind::Up(_) => {
-                                InputEvent::PointerButton { event: e }
-                            }
-                            crossterm::event::MouseEventKind::Drag(_)
-                            | crossterm::event::MouseEventKind::Moved => {
-                                InputEvent::PointerMotionAbsolute { event: e }
-                            }
-                            crossterm::event::MouseEventKind::ScrollDown
-                            | crossterm::event::MouseEventKind::ScrollUp
-                            | crossterm::event::MouseEventKind::ScrollLeft
-                            | crossterm::event::MouseEventKind::ScrollRight => {
-                                InputEvent::PointerAxis { event: e }
-                            }
-                        };
-                        state.process_input_event::<RatatuiInputBackend>(event);
-                    }
-                }
+                handler.handle_event(event, &mut data.state, &mut data.display_handle);
             },
         )
         .unwrap();
