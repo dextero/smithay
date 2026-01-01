@@ -173,7 +173,7 @@ pub fn init_ratatui(
                             };
 
                             if let Err(e) = try_render() {
-                                error!("{}", e);
+                                error!("{:#?}", e);
                             }
                         });
 
