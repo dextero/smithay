@@ -339,6 +339,12 @@ pub fn init_ratatui(
                         state.space.refresh();
                         state.popups.cleanup();
                         let _ = display.flush_clients();
+
+                        // FIXME: exit to avoid infinite loop for LLM-assisted
+                        // debugging; if we get there without panic we're OK
+                        if elements_count > 0 {
+                            std::process::exit(0);
+                        }
                     }
                     RatatuiEvent::Resize(_, _) => {
                         output.change_current_state(
