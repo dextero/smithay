@@ -176,6 +176,9 @@ pub fn init_ratatui(
                                 error!("{:#?}", e);
                             }
                         });
+                        if windows_to_render.len() != state.space.elements().count() {
+                            panic!("failed to import all window dmabufs");
+                        }
 
                         gpu_renderer.render_scene(
                             screen_view,
