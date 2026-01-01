@@ -19,19 +19,19 @@ use crate::vulkan_import::VulkanImport;
 use crate::{CalloopData, Smallvil};
 use gpu_ansi_encoder::GpuAnsiEncoder;
 
+use tokio::sync::mpsc;
+
 struct RatatuiHandler {
     wgpu_device: Arc<wgpu::Device>,
     wgpu_queue: Arc<wgpu::Queue>,
-    ansi_encoder: GpuAnsiEncoder,
     gpu_renderer: GpuRenderer,
     vulkan_import: VulkanImport,
     output: Output,
     backend: ratatui::RatatuiBackend,
 
-    previous_texture: Option<wgpu::Texture>,
-    current_screen_texture: Option<(wgpu::Texture, wgpu::TextureView, Size<i32, Physical>)>,
     frames: u32,
     render_start: std::time::Instant,
+    tx: mpsc::Sender<Option<wgpu::Texture>>,
 }
 
 impl RatatuiHandler {
@@ -50,32 +50,26 @@ impl RatatuiHandler {
         // Composite scene into a texture
         let screen_size = self.output.current_mode().unwrap().size;
 
-        if self
-            .current_screen_texture
-            .as_ref()
-            .map(|(_, _, size)| *size != screen_size)
-            .unwrap_or(true)
-        {
-            let screen_desc = wgpu::TextureDescriptor {
-                label: Some("screen_texture"),
-                size: wgpu::Extent3d {
-                    width: screen_size.w as u32,
-                    height: screen_size.h as u32,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Uint,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[wgpu::TextureFormat::Rgba8Uint],
-            };
-            let tex = self.wgpu_device.create_texture(&screen_desc);
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.current_screen_texture = Some((tex, view, screen_size));
-        }
+        // For now, always create a new texture to avoid race conditions with the encoding task.
+        // We can optimize this later with a texture pool.
+        let screen_desc = wgpu::TextureDescriptor {
+            label: Some("screen_texture"),
+            size: wgpu::Extent3d {
+                width: screen_size.w as u32,
+                height: screen_size.h as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Uint,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[wgpu::TextureFormat::Rgba8Uint],
+        };
+        let screen_texture = self.wgpu_device.create_texture(&screen_desc);
+        let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut windows_to_render = Vec::new();
         state.space.elements().for_each(|window| {
@@ -84,22 +78,14 @@ impl RatatuiHandler {
             }
         });
 
-        let (screen_texture, screen_view, _) = self.current_screen_texture.as_ref().unwrap();
-
         self.gpu_renderer.render_scene(
-            screen_view,
+            &screen_view,
             Size::from((screen_size.w, screen_size.h)),
             &windows_to_render,
         );
 
-        // Encode to ANSI and print
-        let ansi_string = pollster::block_on(
-            self.ansi_encoder
-                .ansi_from_texture(self.previous_texture.as_ref(), screen_texture),
-        )
-        .unwrap();
-        print!("{}", &*ansi_string);
-        let _ = std::io::stdout().flush();
+        // Send to encoding task
+        let _ = self.tx.try_send(Some(screen_texture));
 
         state.space.elements().for_each(|window| {
             window.send_frame(
@@ -113,12 +99,6 @@ impl RatatuiHandler {
         state.space.refresh();
         state.popups.cleanup();
         let _ = display.flush_clients();
-
-        // Release the borrow of screen_texture before calling update_previous_texture
-        if let Some((screen_texture, _, _)) = self.current_screen_texture.as_ref() {
-            let screen_texture = screen_texture.clone();
-            self.update_previous_texture(&screen_texture);
-        }
     }
 
     fn import_window(
@@ -206,51 +186,6 @@ impl RatatuiHandler {
         })
     }
 
-    fn update_previous_texture(&mut self, screen_texture: &wgpu::Texture) {
-        let prev_tex = if let Some(ref prev) = self.previous_texture {
-            if prev.size() == screen_texture.size() {
-                prev.clone()
-            } else {
-                let desc = wgpu::TextureDescriptor {
-                    label: Some("previous_texture"),
-                    size: screen_texture.size(),
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Uint,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                };
-                self.wgpu_device.create_texture(&desc)
-            }
-        } else {
-            let desc = wgpu::TextureDescriptor {
-                label: Some("previous_texture"),
-                size: screen_texture.size(),
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Uint,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            };
-            self.wgpu_device.create_texture(&desc)
-        };
-
-        let mut encoder =
-            self.wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("copy_to_prev"),
-            });
-        encoder.copy_texture_to_texture(
-            screen_texture.as_image_copy(),
-            prev_tex.as_image_copy(),
-            screen_texture.size(),
-        );
-        self.wgpu_queue.submit(std::iter::once(encoder.finish()));
-
-        self.previous_texture = Some(prev_tex);
-    }
-
     fn handle_event(&mut self, event: RatatuiEvent, state: &mut Smallvil, display: &mut DisplayHandle) {
         match event {
             RatatuiEvent::Redraw => {
@@ -266,7 +201,7 @@ impl RatatuiHandler {
                     None,
                     None,
                 );
-                self.previous_texture = None; // Reset diffing on resize
+                let _ = self.tx.try_send(None); // Reset diffing on resize
             }
             event @ RatatuiEvent::Key { .. } => {
                 eprintln!("Ratatui Key Event: {:?}", event);
@@ -360,18 +295,36 @@ pub fn init_ratatui(
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
+    let (tx, mut rx) = mpsc::channel::<Option<wgpu::Texture>>(2);
+    let ansi_encoder = Arc::new(ansi_encoder);
+
+    tokio::spawn(async move {
+        let mut previous_texture: Option<wgpu::Texture> = None;
+        while let Some(msg) = rx.recv().await {
+            if let Some(current_texture) = msg {
+                let ansi_string = ansi_encoder
+                    .ansi_from_texture(previous_texture.as_ref(), &current_texture)
+                    .await
+                    .unwrap();
+                print!("{}", &*ansi_string);
+                let _ = std::io::stdout().flush();
+                previous_texture = Some(current_texture);
+            } else {
+                previous_texture = None;
+            }
+        }
+    });
+
     let mut handler = RatatuiHandler {
         wgpu_device,
         wgpu_queue,
-        ansi_encoder,
         gpu_renderer,
         vulkan_import,
         output,
         backend,
-        previous_texture: None,
-        current_screen_texture: None,
         frames: 0,
         render_start: std::time::Instant::now(),
+        tx,
     };
 
     event_loop
