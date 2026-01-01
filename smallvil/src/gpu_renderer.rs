@@ -197,3 +197,248 @@ impl GpuRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smithay::utils::Point;
+
+    async fn get_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .expect("Failed to find wgpu adapter");
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("Failed to create wgpu device");
+        (Arc::new(device), Arc::new(queue))
+    }
+
+    #[tokio::test]
+    async fn test_render_simple_rect() {
+        let (device, queue) = get_device().await;
+        let renderer = GpuRenderer::new(device.clone(), queue.clone());
+
+        let width = 256;
+        let height = 256;
+        let screen_size = Size::from((width as i32, height as i32));
+
+        let texture_desc = wgpu::TextureDescriptor {
+            label: Some("target_texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Uint,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+        let target_texture = device.create_texture(&texture_desc);
+        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create a 1x1 white source texture
+        let src_texture_desc = wgpu::TextureDescriptor {
+            label: Some("src_texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+        let src_texture = device.create_texture(&src_texture_desc);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &src_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255, 255, 255, 255],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Render a 50x50 rect at (25, 25)
+        renderer.render_scene(
+            &target_view,
+            screen_size,
+            &[(src_texture, Point::from((25, 25)), Size::from((50, 50)))],
+        );
+
+        // Read back
+        let buffer_size = (width * height * 4) as wgpu::BufferAddress;
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback_buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("readback_encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            target_texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &output_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let buffer_slice = output_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("device poll failed");
+        rx.recv().unwrap().expect("map_async failed");
+
+        let data = buffer_slice.get_mapped_range();
+        
+        // Check pixel at (50, 50) which should be white
+        let pixel_offset = ((50 * width + 50) * 4) as usize;
+        assert_eq!(data[pixel_offset..pixel_offset+4], [255, 255, 255, 255]);
+
+        // Check pixel at (10, 10) which should be black (clear color)
+        let pixel_offset = ((10 * width + 10) * 4) as usize;
+        assert_eq!(data[pixel_offset..pixel_offset+4], [0, 0, 0, 1]);
+
+        drop(data);
+        output_buffer.unmap();
+    }
+
+    #[tokio::test]
+    async fn test_render_multiple_windows() {
+        let (device, queue) = get_device().await;
+        let renderer = GpuRenderer::new(device.clone(), queue.clone());
+
+        let width = 256;
+        let height = 256;
+        let screen_size = Size::from((width as i32, height as i32));
+
+        let texture_desc = wgpu::TextureDescriptor {
+            label: Some("target_texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Uint,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+        let target_texture = device.create_texture(&texture_desc);
+        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Create Red and Blue 1x1 source textures
+        let src_texture_desc = wgpu::TextureDescriptor {
+            label: Some("src_texture"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+        let red_texture = device.create_texture(&src_texture_desc);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &red_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &[255, 0, 0, 255],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let blue_texture = device.create_texture(&src_texture_desc);
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &blue_texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &[0, 0, 255, 255],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+
+        // Render Red at (0,0) 100x100, then Blue at (50,50) 100x100 (Blue should be on top)
+        renderer.render_scene(
+            &target_view,
+            screen_size,
+            &[
+                (red_texture, Point::from((0, 0)), Size::from((100, 100))),
+                (blue_texture, Point::from((50, 50)), Size::from((100, 100))),
+            ],
+        );
+
+        // Read back
+        let buffer_size = (width * height * 4) as wgpu::BufferAddress;
+        let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback_buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        encoder.copy_texture_to_buffer(
+            target_texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &output_buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(height) },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let buffer_slice = output_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| { tx.send(result).unwrap(); });
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("poll failed");
+        rx.recv().unwrap().expect("map failed");
+
+        let data = buffer_slice.get_mapped_range();
+        
+        // (25, 25) should be Red [255, 0, 0, 255]
+        let off = ((25 * width + 25) * 4) as usize;
+        assert_eq!(data[off..off+4], [255, 0, 0, 255]);
+
+        // (75, 75) should be Blue [0, 0, 255, 255] (overlap area)
+        let off = ((75 * width + 75) * 4) as usize;
+        assert_eq!(data[off..off+4], [0, 0, 255, 255]);
+
+        // (125, 125) should be Blue [0, 0, 255, 255]
+        let off = ((125 * width + 125) * 4) as usize;
+        assert_eq!(data[off..off+4], [0, 0, 255, 255]);
+
+        // (200, 200) should be Black [0, 0, 0, 1]
+        let off = ((200 * width + 200) * 4) as usize;
+        assert_eq!(data[off..off+4], [0, 0, 0, 1]);
+
+        drop(data);
+        output_buffer.unmap();
+    }
+}
