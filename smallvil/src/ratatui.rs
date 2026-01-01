@@ -133,7 +133,7 @@ pub fn init_ratatui(
                                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                                     | wgpu::TextureUsages::TEXTURE_BINDING
                                     | wgpu::TextureUsages::COPY_SRC,
-                                view_formats: &[],
+                                view_formats: &[wgpu::TextureFormat::Rgba8Uint],
                             };
                             let tex = wgpu_device.create_texture(&screen_desc);
                             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -143,13 +143,12 @@ pub fn init_ratatui(
                         let (screen_texture, screen_view, _) = current_screen_texture.as_ref().unwrap();
 
                         let mut windows_to_render = Vec::new();
-                        let elements_count = state.space.elements().count();
-                        if elements_count > 0 {
-                            eprintln!("rendering {} windows", elements_count);
-                        }
                         state.space.elements().for_each(|window| {
                             let mut try_render = || -> anyhow::Result<()> {
                                 let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
+                                // with_states does some locking. We need to get the size in advance.
+                                let window_size = window.geometry().size;
+
                                 let Some(location) = state.space.element_location(window) else {
                                     bail!("{:#?} has no location in {:#?}", window, state.space);
                                 };
@@ -171,6 +170,7 @@ pub fn init_ratatui(
                                         let stride = data.stride as usize;
                                         let height = data.height as usize;
                                         let width = data.width as usize;
+                                        eprintln!("import shm texture, offset {offset}, stride {stride}, size {width}x{height}");
 
                                         let size = wgpu::Extent3d {
                                             width: width as u32,
@@ -194,7 +194,7 @@ pub fn init_ratatui(
                                             dimension: wgpu::TextureDimension::D2,
                                             format: wgpu_format,
                                             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                                            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+                                            view_formats: &[wgpu_format],
                                         });
 
                                         let data_ptr = unsafe { ptr.add(offset) };
@@ -215,25 +215,27 @@ pub fn init_ratatui(
                                             },
                                             size,
                                         );
+                                        eprintln!("texture written");
                                         texture
                                     }) {
                                         shm_texture
                                     } else {
                                         bail!("window has no dmabuf and shm failed");
                                     };
-                                    windows_to_render.push((texture, location, window.geometry().size));
+                                    eprintln!("push?");
+                                    windows_to_render.push((texture, location, window_size));
+                                    eprintln!("push!");
                                     Ok(())
                                 })?;
                                 Ok(())
                             };
 
+                            eprintln!("wat");
+
                             if let Err(e) = try_render() {
                                 eprintln!("failed to render window: {:#?}", e);
                             }
                         });
-                        if windows_to_render.len() != elements_count {
-                            eprintln!("Warning: failed to import {}/{} windows", elements_count - windows_to_render.len(), elements_count);
-                        }
 
                         gpu_renderer.render_scene(
                             screen_view,
@@ -248,85 +250,6 @@ pub fn init_ratatui(
                         .unwrap();
                         print!("{}", &*ansi_string);
                         let _ = std::io::stdout().flush();
-
-                        if !ansi_string.is_empty() {
-                            // Save screenshot before exiting
-                            let (width, height) = (screen_size.w as u32, screen_size.h as u32);
-                            let unpadded_bytes_per_row = width * 4;
-                            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-                            let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
-                            let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
-
-                            let buffer_size = (padded_bytes_per_row * height) as wgpu::BufferAddress;
-                            let output_buffer = wgpu_device.create_buffer(&wgpu::BufferDescriptor {
-                                label: Some("screenshot_buffer"),
-                                size: buffer_size,
-                                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                                mapped_at_creation: false,
-                            });
-
-                            let mut encoder =
-                                wgpu_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                                    label: Some("screenshot_encoder"),
-                                });
-                            encoder.copy_texture_to_buffer(
-                                screen_texture.as_image_copy(),
-                                wgpu::TexelCopyBufferInfo {
-                                    buffer: &output_buffer,
-                                    layout: wgpu::TexelCopyBufferLayout {
-                                        offset: 0,
-                                        bytes_per_row: Some(padded_bytes_per_row),
-                                        rows_per_image: Some(height),
-                                    },
-                                },
-                                wgpu::Extent3d {
-                                    width,
-                                    height,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-                            wgpu_queue.submit(std::iter::once(encoder.finish()));
-
-                            let buffer_slice = output_buffer.slice(..);
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-                                tx.send(result).unwrap();
-                            });
-                            let _ = wgpu_device.poll(wgpu::PollType::wait_indefinitely());
-                            rx.recv().unwrap().unwrap();
-
-                            let data = buffer_slice.get_mapped_range();
-                            
-                            // Remove padding if necessary for single color check and saving
-                            let mut unpadded_data = Vec::with_capacity((width * height * 4) as usize);
-                            for chunk in data.chunks_exact(padded_bytes_per_row as usize) {
-                                unpadded_data.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
-                            }
-
-                            let is_single_color = if unpadded_data.len() >= 4 {
-                                let first_pixel = &unpadded_data[0..4];
-                                unpadded_data.chunks_exact(4).all(|pixel| pixel == first_pixel)
-                            } else {
-                                true
-                            };
-
-                            if !is_single_color {
-                                image::save_buffer(
-                                    "/tmp/screenshot.png",
-                                    &unpadded_data,
-                                    width,
-                                    height,
-                                    image::ExtendedColorType::Rgba8,
-                                )
-                                .expect("Failed to save screenshot");
-                                drop(data);
-                                output_buffer.unmap();
-
-                                std::process::exit(0);
-                            }
-                            drop(data);
-                            output_buffer.unmap();
-                        }
 
                         // We need a persistent copy for diffing if current_screen_texture is repurposed
                         // Actually, GpuAnsiEncoder diffs current against previous.
