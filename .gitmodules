@@ -1,0 +1,3 @@
+[submodule "rust-gpu-test"]
+	path = rust-gpu-test
+	url = ssh://dex@127.0.0.1//home/dex/projects/rust-gpu-test
