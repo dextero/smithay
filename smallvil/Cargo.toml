@@ -18,6 +18,7 @@ pollster = "0.4.0"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 ash = "0.38.0"
 image = "0.25"
+anyhow = "1.0.100"
 
 [dependencies.smithay]
 path = "../"

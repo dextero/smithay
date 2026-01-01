@@ -2,6 +2,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{bail, Context};
 use smithay::{
     backend::{
         input::InputEvent,
@@ -12,6 +13,7 @@ use smithay::{
     utils::{Physical, Size, Transform},
     wayland::compositor::with_states,
 };
+use tracing::error;
 
 use crate::gpu_renderer::GpuRenderer;
 use crate::vulkan_import::VulkanImport;
@@ -142,25 +144,37 @@ pub fn init_ratatui(
                         let (screen_texture, screen_view, _) = current_screen_texture.as_ref().unwrap();
 
                         let mut windows_to_render = Vec::new();
+                        eprintln!("rendering {} windows", state.space.elements().count());
                         state.space.elements().for_each(|window| {
-                            let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
-                            let location = state.space.element_location(window).unwrap();
+                            let mut try_render = || -> anyhow::Result<()> {
+                                let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
+                                let Some(location) = state.space.element_location(window) else {
+                                    bail!("{:#?} has no location in {:#?}", window, state.space);
+                                };
 
-                            with_states(surface, |surface_data| {
-                                let surface_state = surface_data
-                                    .data_map
-                                    .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
-                                    .unwrap()
-                                    .lock()
-                                    .unwrap();
-                                if let Some(buffer) = surface_state.buffer() {
-                                    if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
-                                        let texture =
-                                            unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
-                                        windows_to_render.push((texture, location, window.geometry().size));
-                                    }
-                                }
-                            });
+                                with_states(surface, |surface_data| -> anyhow::Result<()> {
+                                    let surface_state = surface_data
+                                        .data_map
+                                        .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+                                        .unwrap()
+                                        .lock()
+                                        .unwrap();
+                                    let Some(buffer) = surface_state.buffer() else {
+                                        bail!("{:#?} has no surface buffer", window);
+                                    };
+                                    let dmabuf = smithay::wayland::dmabuf::get_dmabuf(buffer)
+                                        .with_context(|| format!("cannot get dmabuf for {:#?}", window))?;
+                                    let texture =
+                                        unsafe { vulkan_import.import_dmabuf(&wgpu_device, &dmabuf) };
+                                    windows_to_render.push((texture, location, window.geometry().size));
+                                    Ok(())
+                                })?;
+                                Ok(())
+                            };
+
+                            if let Err(e) = try_render() {
+                                error!("{}", e);
+                            }
                         });
 
                         gpu_renderer.render_scene(
