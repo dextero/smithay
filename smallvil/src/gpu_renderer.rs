@@ -1,6 +1,6 @@
 use smithay::utils::{Logical, Point, Size};
 use std::sync::Arc;
-use wgpu::util::DeviceExt;
+use wgpu::{BlendState, util::DeviceExt};
 
 pub struct GpuRenderer {
     device: Arc<wgpu::Device>,
@@ -69,8 +69,8 @@ impl GpuRenderer {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Uint,
-                    blend: None,
+                    format: wgpu::TextureFormat::Bgra8Unorm,
+                    blend: Some(BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),

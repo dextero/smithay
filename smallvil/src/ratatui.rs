@@ -9,11 +9,22 @@ use smithay::{
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    reexports::{calloop::EventLoop, wayland_server::protocol::wl_shm, wayland_server::DisplayHandle},
+    reexports::{
+        calloop::EventLoop,
+        wayland_server::{
+            protocol::{wl_shm, wl_surface::WlSurface},
+            DisplayHandle,
+        },
+    },
     utils::{Logical, Point, Size, Transform},
-    wayland::{compositor::with_states, shm},
+    wayland::{
+        compositor::{
+            with_surface_tree_downward, SubsurfaceCachedState, SurfaceData, TraversalAction,
+        },
+        shm,
+    },
 };
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::gpu_renderer::GpuRenderer;
 use crate::vulkan_import::VulkanImport;
@@ -50,20 +61,18 @@ impl RatatuiHandler {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Uint,
+            format: wgpu::TextureFormat::Bgra8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[wgpu::TextureFormat::Rgba8Uint],
+            view_formats: &[wgpu::TextureFormat::Bgra8Unorm],
         };
         let screen_texture = self.wgpu_device.create_texture(&screen_desc);
         let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let mut windows_to_render = Vec::new();
         state.space.elements().for_each(|window| {
-            if let Err(e) = self.import_window(state, window, &mut windows_to_render) {
-                eprintln!("failed to import window: {:#?}", e);
-            }
+            self.import_window(state, window, &mut windows_to_render);
         });
 
         self.gpu_renderer.render_scene(
@@ -94,86 +103,111 @@ impl RatatuiHandler {
         state: &Smallvil,
         window: &smithay::desktop::Window,
         windows_to_render: &mut Vec<(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)>,
-    ) -> anyhow::Result<()> {
-        let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
-        let window_size = window.geometry().size;
-
-        let Some(location) = state.space.element_location(window) else {
-            bail!("{:#?} has no location in {:#?}", window, state.space);
+    ) {
+        let Some(window_location) = state.space.element_location(window) else {
+            return;
         };
 
-        with_states(surface, |surface_data| -> anyhow::Result<()> {
-            let surface_state = surface_data
-                .data_map
-                .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
-                .unwrap()
-                .lock()
-                .unwrap();
-            let Some(buffer) = surface_state.buffer() else {
-                bail!("window has no surface buffer");
+        let geometry = window.geometry();
+        let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
+
+        with_surface_tree_downward(
+            surface,
+            window_location - geometry.loc,
+            |_, states, &location| {
+                let mut location = location;
+                if let Some(subsurface) = states.data_map.get::<SubsurfaceCachedState>() {
+                    location += subsurface.location;
+                }
+                TraversalAction::DoChildren(location)
+            },
+            |surface, states, &location| {
+                if let Err(e) = self.import_surface(surface, states, location, windows_to_render) {
+                    eprintln!("failed to import surface: {:#?}", e);
+                }
+            },
+            |_, _, _| true,
+        );
+    }
+
+    fn import_surface(
+        &self,
+        _surface: &WlSurface,
+        states: &SurfaceData,
+        location: Point<i32, Logical>,
+        windows_to_render: &mut Vec<(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)>,
+    ) -> anyhow::Result<()> {
+        let surface_state = states
+            .data_map
+            .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+            .unwrap()
+            .lock()
+            .unwrap();
+        let Some(buffer) = surface_state.buffer() else {
+            return Ok(());
+        };
+
+        let buffer_size = surface_state.buffer_size().unwrap_or_default();
+
+        let texture = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
+            unsafe { self.vulkan_import.import_dmabuf(&self.wgpu_device, &dmabuf) }
+        } else if let Ok(shm_texture) = shm::with_buffer_contents(buffer, |ptr, _len, data| {
+            let offset = data.offset as usize;
+            let stride = data.stride as usize;
+            let height = data.height as usize;
+            let width = data.width as usize;
+
+            let size = wgpu::Extent3d {
+                width: width as u32,
+                height: height as u32,
+                depth_or_array_layers: 1,
             };
-            let texture = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(buffer) {
-                info!("texture: dmabuf import");
-                unsafe { self.vulkan_import.import_dmabuf(&self.wgpu_device, &dmabuf) }
-            } else if let Ok(shm_texture) = shm::with_buffer_contents(buffer, |ptr, _len, data| {
-                info!("texture: shm import");
-                let offset = data.offset as usize;
-                let stride = data.stride as usize;
-                let height = data.height as usize;
-                let width = data.width as usize;
 
-                let size = wgpu::Extent3d {
-                    width: width as u32,
-                    height: height as u32,
-                    depth_or_array_layers: 1,
-                };
-
-                let wgpu_format = match data.format {
-                    wl_shm::Format::Argb8888 => wgpu::TextureFormat::Bgra8Unorm,
-                    wl_shm::Format::Xrgb8888 => wgpu::TextureFormat::Bgra8Unorm,
-                    wl_shm::Format::Abgr8888 => wgpu::TextureFormat::Rgba8Unorm,
-                    wl_shm::Format::Xbgr8888 => wgpu::TextureFormat::Rgba8Unorm,
-                    _ => panic!("unsupported format: {:?}", data.format),
-                };
-
-                let texture = self.wgpu_device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("shm_texture"),
-                    size,
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu_format,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[wgpu_format],
-                });
-
-                let data_ptr = unsafe { ptr.add(offset) };
-                let data_slice = unsafe { std::slice::from_raw_parts(data_ptr, stride * height) };
-
-                self.wgpu_queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    data_slice,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(stride as u32),
-                        rows_per_image: Some(height as u32),
-                    },
-                    size,
-                );
-                texture
-            }) {
-                shm_texture
-            } else {
-                bail!("window has no dmabuf and shm failed");
+            let wgpu_format = match data.format {
+                wl_shm::Format::Argb8888 => wgpu::TextureFormat::Bgra8Unorm,
+                wl_shm::Format::Xrgb8888 => wgpu::TextureFormat::Bgra8Unorm,
+                wl_shm::Format::Abgr8888 => wgpu::TextureFormat::Rgba8Unorm,
+                wl_shm::Format::Xbgr8888 => wgpu::TextureFormat::Rgba8Unorm,
+                _ => panic!("unsupported format: {:?}", data.format),
             };
-            windows_to_render.push((texture, location, window_size));
-            Ok(())
-        })
+
+            let texture = self.wgpu_device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("shm_texture"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu_format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[wgpu_format],
+            });
+
+            let data_ptr = unsafe { ptr.add(offset) };
+            let data_slice = unsafe { std::slice::from_raw_parts(data_ptr, stride * height) };
+
+            self.wgpu_queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data_slice,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride as u32),
+                    rows_per_image: Some(height as u32),
+                },
+                size,
+            );
+            texture
+        }) {
+            shm_texture
+        } else {
+            bail!("window has no dmabuf and shm failed");
+        };
+        windows_to_render.push((texture, location, buffer_size));
+        Ok(())
     }
 
     fn handle_event(&mut self, event: RatatuiEvent, state: &mut Smallvil, display: &mut DisplayHandle) {
