@@ -106,11 +106,8 @@ impl RatatuiHandler {
         window: &smithay::desktop::Window,
         windows_to_render: &mut Vec<(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)>,
     ) {
-        let Some(mut window_location) = state.space.element_location(window) else {
-            return;
-        };
-
         let surface = window.toplevel().expect("Not a toplevel?").wl_surface();
+        let window_location = window.geometry().loc;
 
         with_surface_tree_downward(
             surface,
