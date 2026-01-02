@@ -29,11 +29,10 @@ struct GlobalUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct RenderUniforms {
-    alpha: f32,
-    _padding1: [f32; 3],
     color: [f32; 4],
+    alpha: f32,
     has_texture: u32,
-    _padding2: [u32; 3],
+    _padding: [u32; 2],
 }
 
 /// A handle to a wgpu texture
@@ -301,11 +300,10 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
         color: crate::backend::renderer::Color32F,
     ) -> Result<(), Self::Error> {
         let uniforms = RenderUniforms {
-            alpha: color.a(),
-            _padding1: [0.0; 3],
             color: [color.r(), color.g(), color.b(), color.a()],
+            alpha: color.a(),
             has_texture: 0,
-            _padding2: [0; 3],
+            _padding: [0; 2],
         };
         let uniform_buffer = self.renderer.inner.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("solid_uniform_buffer"),
@@ -384,11 +382,10 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
         alpha: f32,
     ) -> Result<(), Self::Error> {
         let uniforms = RenderUniforms {
-            alpha,
-            _padding1: [0.0; 3],
             color: [0.0; 4],
+            alpha,
             has_texture: 1,
-            _padding2: [0; 3],
+            _padding: [0; 2],
         };
         let uniform_buffer = self.renderer.inner.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("texture_uniform_buffer"),

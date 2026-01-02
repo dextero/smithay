@@ -30,11 +30,10 @@ var t_diffuse: texture_2d<f32>;
 var s_diffuse: sampler;
 
 struct RenderUniforms {
-    alpha: f32,
-    _padding1: vec3<f32>,
     color: vec4<f32>,
+    alpha: f32,
     has_texture: u32,
-    _padding2: vec3<u32>,
+    _padding: vec2<u32>,
 };
 
 @group(2) @binding(0)
