@@ -1,5 +1,6 @@
 use std::os::fd::FromRawFd;
-use std::{fs::File, io::Write};
+use std::{fs::File, io::Write, path::Path};
+use image::{ImageBuffer, Rgba};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -144,6 +145,89 @@ impl RatatuiHandler {
         state.space.refresh();
         state.popups.cleanup();
         let _ = display.flush_clients();
+    }
+}
+
+pub async fn save_texture_to_file(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    path: impl AsRef<Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let size = texture.size();
+    let width = size.width;
+    let height = size.height;
+
+    let bytes_per_pixel = 4;
+    let unpadded_bytes_per_row = width * bytes_per_pixel;
+    let align = 256;
+    let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+    let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+
+    let buffer_size = (padded_bytes_per_row * height) as u64;
+    let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Texture Save Staging Buffer"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Texture Save Encoder"),
+    });
+
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging_buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        size,
+    );
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let buffer_slice = staging_buffer.slice(..);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    buffer_slice.map_async(wgpu::MapMode::Read, 0..buffer_size, move |v| {
+        tx.send(v).ok();
+    });
+
+    device.poll(wgpu::PollType::wait_indefinitely());
+
+    if let Ok(Ok(())) = rx.await {
+        let data = buffer_slice.get_mapped_range();
+        let mut result = Vec::with_capacity((width * height * bytes_per_pixel) as usize);
+
+        for chunk in data.chunks(padded_bytes_per_row as usize) {
+            result.extend_from_slice(&chunk[..unpadded_bytes_per_row as usize]);
+        }
+
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
+        
+        for (idx, pixel) in result.chunks_exact(4).enumerate() {
+            let x = (idx as u32) % width;
+            let y = (idx as u32) / width;
+            // BGRA -> RGBA
+            img.put_pixel(x, y, Rgba([pixel[2], pixel[1], pixel[0], 255]));
+        }
+        
+        img.save(path)?;
+        drop(data);
+        staging_buffer.unmap();
+        Ok(())
+    } else {
+        Err("Failed to map buffer".into())
     }
 }
 
