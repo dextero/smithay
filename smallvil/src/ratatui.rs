@@ -5,12 +5,19 @@ use std::time::Duration;
 
 use smithay::{
     backend::{
+        allocator::{
+            gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
+            Fourcc, Modifier, Allocator,
+        },
+        egl::{EGLContext, EGLDisplay},
         input::InputEvent,
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
         renderer::{
             damage::OutputDamageTracker,
             element::surface::WaylandSurfaceRenderElement,
-            wgpu::{WgpuRenderer, WgpuTexture},
+            gles::GlesRenderer,
+            wgpu::WgpuRenderer,
+            Bind, ImportDma,
         },
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
@@ -20,7 +27,7 @@ use smithay::{
     },
     utils::Transform,
 };
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{CalloopData, Smallvil};
 use gpu_ansi_encoder::GpuAnsiEncoder;
@@ -28,89 +35,26 @@ use gpu_ansi_encoder::GpuAnsiEncoder;
 use tokio::sync::mpsc;
 
 struct RatatuiHandler {
-    renderer: WgpuRenderer,
+    renderer: GlesRenderer,
+    wgpu_renderer: WgpuRenderer,
+    allocator: GbmAllocator<Arc<File>>,
     output: Output,
     damage_tracker: OutputDamageTracker,
     backend: ratatui::RatatuiBackend,
-
     tx: mpsc::Sender<Option<wgpu::Texture>>,
 }
 
 impl RatatuiHandler {
-    fn redraw(&mut self, state: &mut Smallvil, display: &mut DisplayHandle) {
-        let screen_size = self.output.current_mode().unwrap().size;
-
-        let screen_desc = wgpu::TextureDescriptor {
-            label: Some("screen_texture"),
-            size: wgpu::Extent3d {
-                width: screen_size.w as u32,
-                height: screen_size.h as u32,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[wgpu::TextureFormat::Bgra8Unorm],
-        };
-        
-        let screen_texture = self.renderer.device().create_texture(&screen_desc);
-        let screen_view = screen_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut screen_wgpu_texture = WgpuTexture::new(
-            screen_texture.clone(),
-            screen_view,
-            (screen_size.w, screen_size.h).into(),
-            None,
-            false,
-        );
-
-        smithay::desktop::space::render_output::<
-            _,
-            WaylandSurfaceRenderElement<WgpuRenderer>,
-            _,
-            _,
-        >(
-            &self.output,
-            &mut self.renderer,
-            &mut screen_wgpu_texture,
-            1.0,
-            0,
-            [&state.space],
-            &[],
-            &mut self.damage_tracker,
-            [0.1, 0.1, 0.4, 1.0],
-        )
-        .unwrap();
-
-        // Send to encoding task
-        let _ = self.tx.try_send(Some(screen_texture));
-
-        state.space.elements().for_each(|window| {
-            window.send_frame(
-                &self.output,
-                state.start_time.elapsed(),
-                Some(Duration::ZERO),
-                |_, _| Some(self.output.clone()),
-            )
-        });
-
-        state.space.refresh();
-        state.popups.cleanup();
-        let _ = display.flush_clients();
-    }
-
     fn handle_event(&mut self, event: RatatuiEvent, state: &mut Smallvil, display: &mut DisplayHandle) {
         match event {
             RatatuiEvent::Redraw => {
                 self.redraw(state, display);
             }
             RatatuiEvent::Resize(_, _) => {
+                let size = self.backend.window_size();
                 self.output.change_current_state(
                     Some(Mode {
-                        size: self.backend.window_size(),
+                        size,
                         refresh: 60_000,
                     }),
                     None,
@@ -143,6 +87,64 @@ impl RatatuiHandler {
             }
         }
     }
+
+    fn redraw(&mut self, state: &mut Smallvil, display: &mut DisplayHandle) {
+        let size = self.output.current_mode().unwrap().size;
+        
+        // Allocate a Dmabuf
+        let mut dmabuf = match self.allocator.create_buffer(
+            size.w as u32,
+            size.h as u32,
+            Fourcc::Xrgb8888,
+            &[Modifier::Linear],
+        ) {
+            Ok(bo) => {
+                use smithay::backend::allocator::dmabuf::AsDmabuf;
+                bo.export().expect("Failed to export dmabuf")
+            },
+            Err(err) => {
+                error!("Failed to allocate dmabuf: {}", err);
+                return;
+            }
+        };
+
+        // Bind and render
+        {
+            let mut target = self.renderer.bind(&mut dmabuf).expect("Failed to bind dmabuf");
+            
+            smithay::desktop::space::render_output(
+                &self.output,
+                &mut self.renderer,
+                &mut target,
+                1.0,
+                0,
+                [&state.space],
+                &[] as &[WaylandSurfaceRenderElement<GlesRenderer>],
+                &mut self.damage_tracker,
+                [0.1f32, 0.1, 0.4, 1.0],
+            ).expect("Failed to render output");
+        }
+
+        // Import to WGPU
+        let wgpu_texture = self.wgpu_renderer.import_dmabuf(&dmabuf, None).expect("Failed to import dmabuf to wgpu");
+        
+        // Send to encoding task
+        let _ = self.tx.try_send(Some(wgpu_texture.wgpu_texture().clone()));
+
+        // Frame callbacks
+        state.space.elements().for_each(|window| {
+            window.send_frame(
+                &self.output,
+                state.start_time.elapsed(),
+                Some(Duration::ZERO),
+                |_, _| Some(self.output.clone()),
+            )
+        });
+
+        state.space.refresh();
+        state.popups.cleanup();
+        let _ = display.flush_clients();
+    }
 }
 
 pub fn init_ratatui(
@@ -151,6 +153,23 @@ pub fn init_ratatui(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let display_handle = &mut data.display_handle;
     let state = &mut data.state;
+
+    // DRM / GBM / EGL / GLES Setup
+    // Manual scan for render node since DrmNode::ty() is acting up
+    let drm_node = (128..136)
+        .map(|i| format!("/dev/dri/renderD{}", i))
+        .filter_map(|path| smithay::backend::drm::DrmNode::from_path(path).ok())
+        .next()
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("No render node found"))?;
+    
+    let fd = Arc::new(File::open(drm_node.dev_path().unwrap())?);
+    let gbm_egl = GbmDevice::new(fd.clone())?;
+    let gbm_alloc = GbmDevice::new(fd)?;
+    
+    let egl_display = unsafe { EGLDisplay::new(gbm_egl) }.expect("Failed to create EGLDisplay");
+    let egl_context = EGLContext::new(&egl_display).expect("Failed to create EGLContext");
+    let renderer = unsafe { GlesRenderer::new(egl_context).expect("Failed to create GlesRenderer") };
+    let allocator = GbmAllocator::new(gbm_alloc, GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
 
     let backend = ratatui::RatatuiBackend::new()?;
 
@@ -174,7 +193,7 @@ pub fn init_ratatui(
 
     state.space.map_output(&output, (0, 0));
 
-    // WGPU Initialization
+    // WGPU Initialization (for encoding)
     let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..Default::default()
@@ -188,7 +207,7 @@ pub fn init_ratatui(
 
     let ansi_encoder =
         pollster::block_on(GpuAnsiEncoder::new(wgpu_device.clone(), wgpu_queue.clone())).unwrap();
-    let renderer = WgpuRenderer::new(&wgpu_instance, wgpu_device.clone(), wgpu_queue.clone());
+    let wgpu_renderer = WgpuRenderer::new(&wgpu_instance, wgpu_device.clone(), wgpu_queue.clone());
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
@@ -237,6 +256,8 @@ pub fn init_ratatui(
 
     let mut handler = RatatuiHandler {
         renderer,
+        wgpu_renderer,
+        allocator,
         output,
         damage_tracker,
         backend,

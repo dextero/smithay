@@ -19,8 +19,18 @@ bytemuck = { version = "1.13.1", features = ["derive"] }
 ash = "0.38.0"
 image = "0.25"
 anyhow = "1.0.100"
+gbm = { version = "0.18.0", default-features = false, features = ["drm-support"] }
+drm = "0.14.0"
 
 [dependencies.smithay]
 path = "../"
 default-features = false
-features = ["backend_winit", "backend_ratatui", "renderer_wgpu", "wayland_frontend", "desktop"]
+features = [
+    "backend_winit",
+    "backend_ratatui",
+    "backend_gbm",
+    "renderer_gl",
+    "renderer_wgpu",
+    "wayland_frontend",
+    "desktop",
+]

@@ -62,6 +62,11 @@ impl WgpuTexture {
             has_alpha,
         }
     }
+
+    /// Get a reference to the underlying wgpu texture
+    pub fn wgpu_texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
 }
 
 impl Texture for WgpuTexture {
@@ -330,7 +335,7 @@ impl<'frame, 'buffer> WgpuFrame<'frame, 'buffer> {
             },
             self.framebuffer.texture.size(),
         );
-        self.renderer.queue.submit(Some(encoder));
+        self.renderer.queue().submit(std::iter::once(encoder.finish()));
 
         Ok(())
     }
