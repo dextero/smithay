@@ -14,11 +14,6 @@ use crate::backend::renderer::{
 use crate::backend::renderer::{ImportMemWl, ImportDmaWl};
 use crate::utils::{Buffer, Physical, Rectangle, Size, Transform};
 
-#[cfg(feature = "ash")]
-use ash::vk;
-#[cfg(feature = "ash")]
-use std::os::unix::io::AsRawFd;
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
@@ -93,7 +88,7 @@ struct WgpuRendererInner {
 
 #[cfg(feature = "ash")]
 struct VulkanData {
-    memory_properties: vk::PhysicalDeviceMemoryProperties,
+    memory_properties: ash::vk::PhysicalDeviceMemoryProperties,
 }
 
 #[cfg(feature = "ash")]
@@ -268,7 +263,7 @@ impl WgpuRenderer {
     }
 
     #[cfg(feature = "ash")]
-    fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
+    fn find_memory_type(&self, type_filter: u32, properties: ash::vk::MemoryPropertyFlags) -> Option<u32> {
         let vulkan_data = self.inner.vulkan_data.as_ref()?;
         for i in 0..vulkan_data.memory_properties.memory_type_count {
             if (type_filter & (1 << i)) != 0
@@ -720,25 +715,25 @@ impl ImportDma for WgpuRenderer {
             let size = dmabuf.size();
             let format = dmabuf.format();
             let (vk_format, wgpu_format) = match format.code {
-                Fourcc::Argb8888 => (vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
-                Fourcc::Xrgb8888 => (vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
-                Fourcc::Abgr8888 => (vk::Format::R8G8B8A8_UNORM, wgpu::TextureFormat::Rgba8Unorm),
-                Fourcc::Xbgr8888 => (vk::Format::R8G8B8A8_UNORM, wgpu::TextureFormat::Rgba8Unorm),
-                _ => (vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
+                Fourcc::Argb8888 => (ash::vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
+                Fourcc::Xrgb8888 => (ash::vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
+                Fourcc::Abgr8888 => (ash::vk::Format::R8G8B8A8_UNORM, wgpu::TextureFormat::Rgba8Unorm),
+                Fourcc::Xbgr8888 => (ash::vk::Format::R8G8B8A8_UNORM, wgpu::TextureFormat::Rgba8Unorm),
+                _ => (ash::vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
             };
 
             let hal_device = unsafe { self.inner.device.as_hal::<hal::api::Vulkan>() }.ok_or(WgpuError::DmaBufImportNotSupported)?;
             let ash_device = hal_device.raw_device();
 
-            let mut external_memory_image_create_info = vk::ExternalMemoryImageCreateInfo::default()
-                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-            let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+            let mut external_memory_image_create_info = ash::vk::ExternalMemoryImageCreateInfo::default()
+                .handle_types(ash::vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let mut modifier_info = ash::vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
                 .drm_format_modifier(format.modifier.into());
             let planes = dmabuf
                 .offsets()
                 .zip(dmabuf.strides())
                 .enumerate()
-                .map(|(_idx, (offset, stride))| vk::SubresourceLayout {
+                .map(|(_idx, (offset, stride))| ash::vk::SubresourceLayout {
                     offset: offset as u64,
                     size: 0,
                     row_pitch: stride as u64,
@@ -747,21 +742,21 @@ impl ImportDma for WgpuRenderer {
                 })
                 .collect::<Vec<_>>();
             modifier_info = modifier_info.plane_layouts(&planes);
-            let image_create_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
+            let image_create_info = ash::vk::ImageCreateInfo::default()
+                .image_type(ash::vk::ImageType::TYPE_2D)
                 .format(vk_format)
-                .extent(vk::Extent3D {
+                .extent(ash::vk::Extent3D {
                     width: size.w as u32,
                     height: size.h as u32,
                     depth: 1,
                 })
                 .mip_levels(1)
                 .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-                .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .samples(ash::vk::SampleCountFlags::TYPE_1)
+                .tiling(ash::vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+                .usage(ash::vk::ImageUsageFlags::SAMPLED | ash::vk::ImageUsageFlags::TRANSFER_SRC)
+                .sharing_mode(ash::vk::SharingMode::EXCLUSIVE)
+                .initial_layout(ash::vk::ImageLayout::UNDEFINED)
                 .push_next(&mut external_memory_image_create_info)
                 .push_next(&mut modifier_info);
             
@@ -771,21 +766,22 @@ impl ImportDma for WgpuRenderer {
             let memory_type_index = self
                 .find_memory_type(
                     memory_requirements.memory_type_bits,
-                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    ash::vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 )
                 .unwrap_or_else(|| {
                     self.find_memory_type(
                         memory_requirements.memory_type_bits,
-                        vk::MemoryPropertyFlags::empty(),
+                        ash::vk::MemoryPropertyFlags::empty(),
                     )
                     .unwrap_or(0)
                 });
             
-            let mut import_memory_fd_info = vk::ImportMemoryFdInfoKHR::default()
-                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            use std::os::unix::io::AsRawFd;
+            let mut import_memory_fd_info = ash::vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(ash::vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
                 .fd(dmabuf.handles().next().ok_or(WgpuError::DmaBufImportNotSupported)?.as_raw_fd());
             
-            let memory_allocate_info = vk::MemoryAllocateInfo::default()
+            let memory_allocate_info = ash::vk::MemoryAllocateInfo::default()
                 .allocation_size(memory_requirements.size)
                 .memory_type_index(memory_type_index)
                 .push_next(&mut import_memory_fd_info);
@@ -908,5 +904,89 @@ impl ImportMemWl for WgpuRenderer {
 
             Ok(texture)
         })?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::renderer::Color32F;
+
+    async fn get_device() -> (wgpu::Instance, Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .expect("Failed to find wgpu adapter");
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .expect("Failed to create wgpu device");
+        (instance, Arc::new(device), Arc::new(queue))
+    }
+
+    #[tokio::test]
+    async fn test_wgpu_renderer_init() {
+        let (instance, device, queue) = get_device().await;
+        let _renderer = WgpuRenderer::new(&instance, device, queue);
+    }
+
+    #[tokio::test]
+    async fn test_wgpu_renderer_import_memory() {
+        let (instance, device, queue) = get_device().await;
+        let mut renderer = WgpuRenderer::new(&instance, device, queue);
+
+        let size = Size::from((128, 128));
+        let data = vec![255u8; (size.w * size.h * 4) as usize];
+        let texture = renderer
+            .import_memory(&data, Fourcc::Argb8888, size, false)
+            .expect("Failed to import memory");
+
+        assert_eq!(texture.width(), 128);
+        assert_eq!(texture.height(), 128);
+        assert_eq!(texture.format(), Some(Fourcc::Argb8888));
+    }
+
+    #[tokio::test]
+    async fn test_wgpu_renderer_render_basic() {
+        let (instance, device, queue) = get_device().await;
+        let mut renderer = WgpuRenderer::new(&instance, device, queue);
+
+        let size = Size::from((128, 128));
+        let texture_desc = wgpu::TextureDescriptor {
+            label: Some("test_target"),
+            size: wgpu::Extent3d {
+                width: size.w as u32,
+                height: size.h as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+        let target_texture = renderer.device().create_texture(&texture_desc);
+        let target_view = target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut target = WgpuTexture::new(target_texture, target_view, size, None, false);
+
+        let mut frame = renderer
+            .render(&mut target, (size.w, size.h).into(), Transform::Normal)
+            .expect("Failed to begin rendering");
+
+        frame
+            .clear(Color32F::new(1.0, 0.0, 0.0, 1.0), &[Rectangle::from_size((size.w, size.h).into())])
+            .expect("Failed to clear");
+
+        frame
+            .draw_solid(
+                Rectangle::new((32, 32).into(), (64, 64).into()),
+                &[Rectangle::new((32, 32).into(), (64, 64).into())],
+                Color32F::new(0.0, 1.0, 0.0, 1.0),
+            )
+            .expect("Failed to draw solid");
+
+        frame.finish().expect("Failed to finish frame");
     }
 }

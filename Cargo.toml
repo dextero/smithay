@@ -113,6 +113,7 @@ timerfd = "1.6.0"
 input-event-codes = "6.2.0"
 
 [dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.5" }
 image = "0.25"
