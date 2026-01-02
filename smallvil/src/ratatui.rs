@@ -1,4 +1,5 @@
-use std::io::Write;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::{fs::File, io::Write};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -322,6 +323,7 @@ pub fn init_ratatui(
         let mut previous_texture: Option<wgpu::Texture> = None;
         let mut frames = 0;
         let mut render_start = std::time::Instant::now();
+        let mut stdout = unsafe { File::from_raw_fd(1) };
 
         while let Some(msg) = rx.recv().await {
             if let Some(current_texture) = msg {
@@ -329,8 +331,14 @@ pub fn init_ratatui(
                     .ansi_from_texture(previous_texture.as_ref(), &current_texture)
                     .await
                     .unwrap();
-                print!("{}", &*ansi_string);
-                let _ = std::io::stdout().flush();
+                {
+                    const START_BUFFERING: &str = "\x1b[?2026h";
+                    const STOP_BUFFERING: &str = "\x1b[?2026l";
+                    stdout.write_all(START_BUFFERING.as_bytes()).unwrap();
+                    stdout.write_all(ansi_string.as_bytes()).unwrap();
+                    stdout.write_all(STOP_BUFFERING.as_bytes()).unwrap();
+                    let _ = stdout.flush().unwrap();
+                }
                 previous_texture = Some(current_texture);
 
                 frames += 1;
