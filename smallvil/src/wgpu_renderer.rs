@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use wgpu::{self, BufferDescriptor, BufferUsages, TexelCopyBufferInfo, TexelCopyBufferLayout};
+use wgpu::{self};
 use wgpu::util::DeviceExt;
 use wgpu_hal as hal;
 
@@ -306,33 +306,6 @@ pub struct WgpuFrame<'frame, 'buffer> {
     _phantom: std::marker::PhantomData<&'buffer ()>,
 }
 
-impl<'frame, 'buffer> WgpuFrame<'frame, 'buffer> {
-    pub fn dump_to_file(&self, _path: &std::path::Path) -> Result<(), std::io::Error> {
-        let mut encoder = self.renderer.device().create_command_encoder(&Default::default());
-        let pixels = self.framebuffer.size.w * self.framebuffer.size.h;
-        let host_buf = self.renderer.device().create_buffer(&BufferDescriptor {
-            label: Some("dump_buf"),
-            size: (pixels * 4) as u64,
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        encoder.copy_texture_to_buffer(
-            self.framebuffer.texture.as_image_copy(),
-            TexelCopyBufferInfo {
-                buffer: &host_buf,
-                layout: TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some((self.framebuffer.size.w * 4) as u32),
-                    rows_per_image: Some(self.framebuffer.size.h as u32),
-                }
-            },
-            self.framebuffer.texture.size(),
-        );
-        self.renderer.queue().submit(std::iter::once(encoder.finish()));
-
-        Ok(())
-    }
-}
 
 impl<'frame, 'buffer> std::fmt::Debug for WgpuFrame<'frame, 'buffer> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

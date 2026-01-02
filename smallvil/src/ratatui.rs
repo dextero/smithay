@@ -198,11 +198,9 @@ pub async fn save_texture_to_file(
 
     let buffer_slice = staging_buffer.slice(..);
     let (tx, rx) = tokio::sync::oneshot::channel();
-
-    buffer_slice.map_async(wgpu::MapMode::Read, 0..buffer_size, move |v| {
+    buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
         tx.send(v).ok();
     });
-
     device.poll(wgpu::PollType::wait_indefinitely());
 
     if let Ok(Ok(())) = rx.await {
