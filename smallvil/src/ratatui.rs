@@ -16,7 +16,6 @@ use smithay::{
             damage::OutputDamageTracker,
             element::surface::WaylandSurfaceRenderElement,
             gles::GlesRenderer,
-            wgpu::WgpuRenderer,
             Bind, ImportDma,
         },
     },
@@ -27,6 +26,7 @@ use smithay::{
     },
     utils::Transform,
 };
+use crate::wgpu_renderer::WgpuRenderer;
 use tracing::{debug, error};
 
 use crate::{CalloopData, Smallvil};

@@ -107,8 +107,6 @@ sha2 = "0.10.9"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 ratatui = { version = "0.29.0", optional = true, features = ["crossterm"] }
 crossterm = { version = "0.28.0", optional = true }
-wgpu = { version = "27.0.1", optional = true }
-wgpu-hal = { version = "27.0.1", optional = true }
 timerfd = "1.6.0"
 input-event-codes = "6.2.0"
 
@@ -138,7 +136,6 @@ default = [
   "renderer_gl",
   "renderer_pixman",
   "renderer_multi",
-  "renderer_wgpu",
   "xwayland",
   "wayland_frontend",
   "backend_vulkan",
@@ -177,7 +174,6 @@ renderer_gl = ["gl_generator", "backend_egl"]
 renderer_glow = ["renderer_gl", "glow"]
 renderer_multi = ["backend_drm", "aliasable"]
 renderer_pixman = ["pixman"]
-renderer_wgpu = ["wgpu", "wgpu-hal", "ash"]
 renderer_test = []
 use_system_lib = [
   "wayland_frontend",

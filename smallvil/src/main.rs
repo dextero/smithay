@@ -7,6 +7,7 @@ mod input;
 mod ratatui;
 mod state;
 mod winit;
+mod wgpu_renderer;
 
 use smithay::reexports::{
     calloop::EventLoop,
