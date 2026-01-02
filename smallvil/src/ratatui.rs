@@ -162,7 +162,7 @@ pub fn init_ratatui(
         .next()
         .ok_or_else(|| Box::<dyn std::error::Error>::from("No render node found"))?;
     
-    let fd = Arc::new(File::open(drm_node.dev_path().unwrap())?);
+    let fd = Arc::new(std::fs::OpenOptions::new().read(true).write(true).open(drm_node.dev_path().unwrap())?);
     let gbm_egl = GbmDevice::new(fd.clone())?;
     let gbm_alloc = GbmDevice::new(fd)?;
     
