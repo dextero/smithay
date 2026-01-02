@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use smithay::wayland::compositor::SubsurfaceUserData;
 use smithay::{
     backend::{
         input::InputEvent,
@@ -105,7 +106,7 @@ impl RatatuiHandler {
         window: &smithay::desktop::Window,
         windows_to_render: &mut Vec<(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)>,
     ) {
-        let Some(window_location) = state.space.element_location(window) else {
+        let Some(mut window_location) = state.space.element_location(window) else {
             return;
         };
 
@@ -134,7 +135,7 @@ impl RatatuiHandler {
         &self,
         _surface: &WlSurface,
         states: &SurfaceData,
-        location: Point<i32, Logical>,
+        mut location: Point<i32, Logical>,
         windows_to_render: &mut Vec<(wgpu::Texture, Point<i32, Logical>, Size<i32, Logical>)>,
     ) -> anyhow::Result<()> {
         let surface_state = states
@@ -145,6 +146,9 @@ impl RatatuiHandler {
             .unwrap();
         let Some(buffer) = surface_state.buffer() else {
             return Ok(());
+        };
+        if let Some(view) = surface_state.view() {
+            location += view.offset;
         };
 
         let buffer_size = surface_state.buffer_size().unwrap_or_default();
