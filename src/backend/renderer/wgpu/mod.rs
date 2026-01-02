@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use wgpu;
 use wgpu::util::DeviceExt;
+use wgpu_hal as hal;
 
-use crate::backend::allocator::Fourcc;
+use crate::backend::allocator::{Fourcc, Buffer as BufferTrait};
 use crate::backend::renderer::{
     Bind, ContextId, DebugFlags, Frame, ImportMem, Renderer, RendererSuper, Texture, TextureFilter,
     ImportDma,
@@ -12,6 +13,11 @@ use crate::backend::renderer::{
 #[cfg(feature = "wayland_frontend")]
 use crate::backend::renderer::{ImportMemWl, ImportDmaWl};
 use crate::utils::{Buffer, Physical, Rectangle, Size, Transform};
+
+#[cfg(feature = "ash")]
+use ash::vk;
+#[cfg(feature = "ash")]
+use std::os::unix::io::AsRawFd;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -80,6 +86,21 @@ struct WgpuRendererInner {
     bind_group_layout_render: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     vertex_buffer: wgpu::Buffer,
+
+    #[cfg(feature = "ash")]
+    vulkan_data: Option<VulkanData>,
+}
+
+#[cfg(feature = "ash")]
+struct VulkanData {
+    memory_properties: vk::PhysicalDeviceMemoryProperties,
+}
+
+#[cfg(feature = "ash")]
+impl std::fmt::Debug for VulkanData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VulkanData").finish_non_exhaustive()
+    }
 }
 
 /// A renderer using wgpu
@@ -91,7 +112,7 @@ pub struct WgpuRenderer {
 
 impl WgpuRenderer {
     /// Create a new wgpu renderer from an existing device and queue
-    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+    pub fn new(instance: &wgpu::Instance, device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("smithay_wgpu_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -209,6 +230,16 @@ impl WgpuRenderer {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        #[cfg(feature = "ash")]
+        let vulkan_data = unsafe { device.as_hal::<hal::api::Vulkan>().and_then(|hal_device| {
+            let physical_device = hal_device.raw_physical_device();
+            instance.as_hal::<hal::api::Vulkan>().map(|hal_instance| {
+                let ash_instance = hal_instance.shared_instance().raw_instance();
+                let memory_properties = ash_instance.get_physical_device_memory_properties(physical_device);
+                VulkanData { memory_properties }
+            })
+        }) };
+
         Self {
             inner: Arc::new(WgpuRendererInner {
                 device,
@@ -219,6 +250,8 @@ impl WgpuRenderer {
                 bind_group_layout_render,
                 sampler,
                 vertex_buffer,
+                #[cfg(feature = "ash")]
+                vulkan_data,
             }),
             context_id: ContextId::new(),
         }
@@ -232,6 +265,19 @@ impl WgpuRenderer {
     /// Get the wgpu queue
     pub fn queue(&self) -> &wgpu::Queue {
         &self.inner.queue
+    }
+
+    #[cfg(feature = "ash")]
+    fn find_memory_type(&self, type_filter: u32, properties: vk::MemoryPropertyFlags) -> Option<u32> {
+        let vulkan_data = self.inner.vulkan_data.as_ref()?;
+        for i in 0..vulkan_data.memory_properties.memory_type_count {
+            if (type_filter & (1 << i)) != 0
+                && (vulkan_data.memory_properties.memory_types[i as usize].property_flags & properties) == properties
+            {
+                return Some(i);
+            }
+        }
+        None
     }
 }
 
@@ -475,6 +521,9 @@ pub enum WgpuError {
     /// DmaBuf import is not supported on this wgpu backend
     #[error("DmaBuf import is not supported")]
     DmaBufImportNotSupported,
+    /// Failed to allocate memory on the GPU
+    #[error("Failed to allocate memory on the GPU")]
+    OutOfMemory,
 }
 
 impl RendererSuper for WgpuRenderer {
@@ -663,10 +712,147 @@ impl ImportMem for WgpuRenderer {
 impl ImportDma for WgpuRenderer {
     fn import_dmabuf(
         &mut self,
-        _dmabuf: &crate::backend::allocator::dmabuf::Dmabuf,
+        dmabuf: &crate::backend::allocator::dmabuf::Dmabuf,
         _damage: Option<&[Rectangle<i32, Buffer>]>,
     ) -> Result<Self::TextureId, Self::Error> {
-        Err(WgpuError::DmaBufImportNotSupported)
+        #[cfg(feature = "ash")]
+        {
+            let size = dmabuf.size();
+            let format = dmabuf.format();
+            let (vk_format, wgpu_format) = match format.code {
+                Fourcc::Argb8888 => (vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
+                Fourcc::Xrgb8888 => (vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
+                Fourcc::Abgr8888 => (vk::Format::R8G8B8A8_UNORM, wgpu::TextureFormat::Rgba8Unorm),
+                Fourcc::Xbgr8888 => (vk::Format::R8G8B8A8_UNORM, wgpu::TextureFormat::Rgba8Unorm),
+                _ => (vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
+            };
+
+            let hal_device = unsafe { self.inner.device.as_hal::<hal::api::Vulkan>() }.ok_or(WgpuError::DmaBufImportNotSupported)?;
+            let ash_device = hal_device.raw_device();
+
+            let mut external_memory_image_create_info = vk::ExternalMemoryImageCreateInfo::default()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+            let mut modifier_info = vk::ImageDrmFormatModifierExplicitCreateInfoEXT::default()
+                .drm_format_modifier(format.modifier.into());
+            let planes = dmabuf
+                .offsets()
+                .zip(dmabuf.strides())
+                .enumerate()
+                .map(|(_idx, (offset, stride))| vk::SubresourceLayout {
+                    offset: offset as u64,
+                    size: 0,
+                    row_pitch: stride as u64,
+                    array_pitch: 0,
+                    depth_pitch: 0,
+                })
+                .collect::<Vec<_>>();
+            modifier_info = modifier_info.plane_layouts(&planes);
+            let image_create_info = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk_format)
+                .extent(vk::Extent3D {
+                    width: size.w as u32,
+                    height: size.h as u32,
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+                .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .initial_layout(vk::ImageLayout::UNDEFINED)
+                .push_next(&mut external_memory_image_create_info)
+                .push_next(&mut modifier_info);
+            
+            let image = unsafe { ash_device.create_image(&image_create_info, None) }.map_err(|e| WgpuError::Wgpu(e.to_string()))?;
+
+            let memory_requirements = unsafe { ash_device.get_image_memory_requirements(image) };
+            let memory_type_index = self
+                .find_memory_type(
+                    memory_requirements.memory_type_bits,
+                    vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                )
+                .unwrap_or_else(|| {
+                    self.find_memory_type(
+                        memory_requirements.memory_type_bits,
+                        vk::MemoryPropertyFlags::empty(),
+                    )
+                    .unwrap_or(0)
+                });
+            
+            let mut import_memory_fd_info = vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                .fd(dmabuf.handles().next().ok_or(WgpuError::DmaBufImportNotSupported)?.as_raw_fd());
+            
+            let memory_allocate_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(memory_requirements.size)
+                .memory_type_index(memory_type_index)
+                .push_next(&mut import_memory_fd_info);
+            
+            let memory = unsafe { ash_device.allocate_memory(&memory_allocate_info, None) }.map_err(|e| WgpuError::Wgpu(e.to_string()))?;
+            unsafe { ash_device.bind_image_memory(image, memory, 0) }.map_err(|e| WgpuError::Wgpu(e.to_string()))?;
+
+            let desc = wgpu::TextureDescriptor {
+                label: Some("imported_dmabuf"),
+                size: wgpu::Extent3d {
+                    width: size.w as u32,
+                    height: size.h as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu_format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            };
+
+            let ash_device_clone = ash_device.clone();
+            let cleanup = Box::new(move || unsafe {
+                ash_device_clone.destroy_image(image, None);
+                ash_device_clone.free_memory(memory, None);
+            });
+
+            let texture = unsafe {
+                self.inner.device.create_texture_from_hal::<hal::api::Vulkan>(
+                    hal_device.texture_from_raw(
+                        image,
+                        &hal::TextureDescriptor {
+                            label: Some("imported_dmabuf"),
+                            size: wgpu::Extent3d {
+                                width: size.w as u32,
+                                height: size.h as u32,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu_format,
+                            usage: wgpu::TextureUses::RESOURCE,
+                            memory_flags: hal::MemoryFlags::empty(),
+                            view_formats: vec![wgpu_format],
+                        },
+                        Some(cleanup),
+                    ),
+                    &desc,
+                )
+            };
+
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            Ok(WgpuTexture {
+                texture: Arc::new(texture),
+                view: Arc::new(view),
+                size: size.into(),
+                format: Some(format.code),
+                has_alpha: crate::backend::allocator::format::has_alpha(format.code),
+            })
+        }
+        #[cfg(not(feature = "ash"))]
+        {
+            Err(WgpuError::DmaBufImportNotSupported)
+        }
     }
 }
 

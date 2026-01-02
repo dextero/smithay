@@ -188,7 +188,7 @@ pub fn init_ratatui(
 
     let ansi_encoder =
         pollster::block_on(GpuAnsiEncoder::new(wgpu_device.clone(), wgpu_queue.clone())).unwrap();
-    let renderer = WgpuRenderer::new(wgpu_device.clone(), wgpu_queue.clone());
+    let renderer = WgpuRenderer::new(&wgpu_instance, wgpu_device.clone(), wgpu_queue.clone());
 
     std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);
 
