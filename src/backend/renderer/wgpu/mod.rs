@@ -1,17 +1,16 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use wgpu;
+use wgpu::{self, BufferDescriptor, BufferUsages, TexelCopyBufferInfo, TexelCopyBufferLayout};
 use wgpu::util::DeviceExt;
 use wgpu_hal as hal;
 
-use crate::backend::allocator::{Fourcc, Buffer as BufferTrait};
+use crate::backend::allocator::{Buffer as BufferTrait, Fourcc};
 use crate::backend::renderer::{
-    Bind, ContextId, DebugFlags, Frame, ImportMem, Renderer, RendererSuper, Texture, TextureFilter,
-    ImportDma,
+    Bind, ContextId, DebugFlags, Frame, ImportDma, ImportMem, Renderer, RendererSuper, Texture, TextureFilter,
 };
 #[cfg(feature = "wayland_frontend")]
-use crate::backend::renderer::{ImportMemWl, ImportDmaWl};
+use crate::backend::renderer::{ImportDmaWl, ImportMemWl};
 use crate::utils::{Buffer, Physical, Rectangle, Size, Transform};
 
 #[repr(C)]
@@ -48,7 +47,13 @@ pub struct WgpuTexture {
 
 impl WgpuTexture {
     /// Create a new WgpuTexture from an existing wgpu texture and view
-    pub fn new(texture: wgpu::Texture, view: wgpu::TextureView, size: Size<i32, Buffer>, format: Option<Fourcc>, has_alpha: bool) -> Self {
+    pub fn new(
+        texture: wgpu::Texture,
+        view: wgpu::TextureView,
+        size: Size<i32, Buffer>,
+        format: Option<Fourcc>,
+        has_alpha: bool,
+    ) -> Self {
         Self {
             texture: Arc::new(texture),
             view: Arc::new(view),
@@ -214,10 +219,22 @@ impl WgpuRenderer {
         });
 
         let vertices = [
-            Vertex { position: [0.0, 0.0], tex_coords: [0.0, 0.0] },
-            Vertex { position: [0.0, 1.0], tex_coords: [0.0, 1.0] },
-            Vertex { position: [1.0, 0.0], tex_coords: [1.0, 0.0] },
-            Vertex { position: [1.0, 1.0], tex_coords: [1.0, 1.0] },
+            Vertex {
+                position: [0.0, 0.0],
+                tex_coords: [0.0, 0.0],
+            },
+            Vertex {
+                position: [0.0, 1.0],
+                tex_coords: [0.0, 1.0],
+            },
+            Vertex {
+                position: [1.0, 0.0],
+                tex_coords: [1.0, 0.0],
+            },
+            Vertex {
+                position: [1.0, 1.0],
+                tex_coords: [1.0, 1.0],
+            },
         ];
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("smithay_wgpu_vertex_buffer"),
@@ -226,14 +243,17 @@ impl WgpuRenderer {
         });
 
         #[cfg(feature = "ash")]
-        let vulkan_data = unsafe { device.as_hal::<hal::api::Vulkan>().and_then(|hal_device| {
-            let physical_device = hal_device.raw_physical_device();
-            instance.as_hal::<hal::api::Vulkan>().map(|hal_instance| {
-                let ash_instance = hal_instance.shared_instance().raw_instance();
-                let memory_properties = ash_instance.get_physical_device_memory_properties(physical_device);
-                VulkanData { memory_properties }
+        let vulkan_data = unsafe {
+            device.as_hal::<hal::api::Vulkan>().and_then(|hal_device| {
+                let physical_device = hal_device.raw_physical_device();
+                instance.as_hal::<hal::api::Vulkan>().map(|hal_instance| {
+                    let ash_instance = hal_instance.shared_instance().raw_instance();
+                    let memory_properties =
+                        ash_instance.get_physical_device_memory_properties(physical_device);
+                    VulkanData { memory_properties }
+                })
             })
-        }) };
+        };
 
         Self {
             inner: Arc::new(WgpuRendererInner {
@@ -267,7 +287,8 @@ impl WgpuRenderer {
         let vulkan_data = self.inner.vulkan_data.as_ref()?;
         for i in 0..vulkan_data.memory_properties.memory_type_count {
             if (type_filter & (1 << i)) != 0
-                && (vulkan_data.memory_properties.memory_types[i as usize].property_flags & properties) == properties
+                && (vulkan_data.memory_properties.memory_types[i as usize].property_flags & properties)
+                    == properties
             {
                 return Some(i);
             }
@@ -285,6 +306,34 @@ pub struct WgpuFrame<'frame, 'buffer> {
     output_size: Size<i32, Physical>,
     transform: Transform,
     _phantom: std::marker::PhantomData<&'buffer ()>,
+}
+
+impl<'frame, 'buffer> WgpuFrame<'frame, 'buffer> {
+    pub fn dump_to_file(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        let mut encoder = self.renderer.device().create_command_encoder(&Default::default());
+        let pixels = self.framebuffer.size().w * self.framebuffer.size().h;
+        let host_buf = self.renderer.device().create_buffer(&BufferDescriptor {
+            label: Some("dump_buf"),
+            size: (pixels * 4).try_into().unwrap(),
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            self.framebuffer.texture.as_image_copy(),
+            TexelCopyBufferInfo {
+                buffer: &host_buf,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some((self.framebuffer.size().w * 4).try_into().unwrap()),
+                    rows_per_image: Some(self.framebuffer.size().h.try_into().unwrap()),
+                }
+            },
+            self.framebuffer.texture.size(),
+        );
+        self.renderer.queue.submit(Some(encoder));
+
+        Ok(())
+    }
 }
 
 impl<'frame, 'buffer> std::fmt::Debug for WgpuFrame<'frame, 'buffer> {
@@ -346,43 +395,71 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
             has_texture: 0,
             _padding: [0; 2],
         };
-        let uniform_buffer = self.renderer.inner.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("solid_uniform_buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let render_bind_group = self.renderer.inner.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.renderer.inner.bind_group_layout_render,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-            label: None,
-        });
+        let uniform_buffer =
+            self.renderer
+                .inner
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("solid_uniform_buffer"),
+                    contents: bytemuck::cast_slice(&[uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+        let render_bind_group = self
+            .renderer
+            .inner
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.renderer.inner.bind_group_layout_render,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+                label: None,
+            });
 
-        let dummy_texture = self.renderer.inner.device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+        let dummy_texture = self
+            .renderer
+            .inner
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bgra8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
         let dummy_view = dummy_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let texture_bind_group = self.renderer.inner.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.renderer.inner.bind_group_layout_texture,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&dummy_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.renderer.inner.sampler) },
-            ],
-            label: None,
-        });
+        let texture_bind_group = self
+            .renderer
+            .inner
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.renderer.inner.bind_group_layout_texture,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&dummy_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.renderer.inner.sampler),
+                    },
+                ],
+                label: None,
+            });
 
         for rect in damage {
             let intersection = rect.intersection(dst).unwrap_or_default();
-            if intersection.is_empty() { continue; }
+            if intersection.is_empty() {
+                continue;
+            }
 
             let mut render_pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("solid_pass"),
@@ -405,7 +482,7 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
             render_pass.set_bind_group(1, &texture_bind_group, &[]);
             render_pass.set_bind_group(2, &render_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.renderer.inner.vertex_buffer.slice(..));
-            
+
             render_pass.draw(0..4, 0..1);
         }
 
@@ -428,32 +505,52 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
             has_texture: 1,
             _padding: [0; 2],
         };
-        let uniform_buffer = self.renderer.inner.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("texture_uniform_buffer"),
-            contents: bytemuck::cast_slice(&[uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let render_bind_group = self.renderer.inner.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.renderer.inner.bind_group_layout_render,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-            label: None,
-        });
+        let uniform_buffer =
+            self.renderer
+                .inner
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("texture_uniform_buffer"),
+                    contents: bytemuck::cast_slice(&[uniforms]),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+        let render_bind_group = self
+            .renderer
+            .inner
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.renderer.inner.bind_group_layout_render,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+                label: None,
+            });
 
-        let texture_bind_group = self.renderer.inner.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.renderer.inner.bind_group_layout_texture,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&texture.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.renderer.inner.sampler) },
-            ],
-            label: None,
-        });
+        let texture_bind_group = self
+            .renderer
+            .inner
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.renderer.inner.bind_group_layout_texture,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.renderer.inner.sampler),
+                    },
+                ],
+                label: None,
+            });
 
         for rect in damage {
             let intersection = rect.intersection(dst).unwrap_or_default();
-            if intersection.is_empty() { continue; }
+            if intersection.is_empty() {
+                continue;
+            }
 
             let mut render_pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("texture_pass"),
@@ -476,7 +573,7 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
             render_pass.set_bind_group(1, &texture_bind_group, &[]);
             render_pass.set_bind_group(2, &render_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.renderer.inner.vertex_buffer.slice(..));
-            
+
             render_pass.draw(0..4, 0..1);
         }
         Ok(())
@@ -491,7 +588,10 @@ impl<'frame, 'buffer> Frame for WgpuFrame<'frame, 'buffer> {
     }
 
     fn finish(self) -> Result<crate::backend::renderer::sync::SyncPoint, Self::Error> {
-        self.renderer.inner.queue.submit(std::iter::once(self.encoder.finish()));
+        self.renderer
+            .inner
+            .queue
+            .submit(std::iter::once(self.encoder.finish()));
         Ok(Default::default())
     }
 }
@@ -525,7 +625,11 @@ impl RendererSuper for WgpuRenderer {
     type Error = WgpuError;
     type TextureId = WgpuTexture;
     type Framebuffer<'buffer> = WgpuTexture;
-    type Frame<'frame, 'buffer> = WgpuFrame<'frame, 'buffer> where 'buffer: 'frame, Self: 'frame;
+    type Frame<'frame, 'buffer>
+        = WgpuFrame<'frame, 'buffer>
+    where
+        'buffer: 'frame,
+        Self: 'frame;
 }
 
 impl Renderer for WgpuRenderer {
@@ -554,22 +658,40 @@ impl Renderer for WgpuRenderer {
     where
         'buffer: 'frame,
     {
-        let encoder = self.inner.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("smithay_wgpu_render_encoder"),
-        });
+        let encoder = self
+            .inner
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("smithay_wgpu_render_encoder"),
+            });
 
         let projection = [
-            2.0 / output_size.w as f32, 0.0, 0.0, 0.0,
-            0.0, -2.0 / output_size.h as f32, 0.0, 0.0,
-            0.0, 0.0, 1.0, 0.0,
-            -1.0, 1.0, 0.0, 1.0,
+            2.0 / output_size.w as f32,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.0 / output_size.h as f32,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            -1.0,
+            1.0,
+            0.0,
+            1.0,
         ];
         let global_uniforms = GlobalUniforms { projection };
-        let global_uniform_buffer = self.inner.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("global_uniform_buffer"),
-            contents: bytemuck::cast_slice(&[global_uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let global_uniform_buffer = self
+            .inner
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("global_uniform_buffer"),
+                contents: bytemuck::cast_slice(&[global_uniforms]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let global_bind_group = self.inner.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.inner.bind_group_layout_global,
             entries: &[wgpu::BindGroupEntry {
@@ -722,7 +844,8 @@ impl ImportDma for WgpuRenderer {
                 _ => (ash::vk::Format::B8G8R8A8_UNORM, wgpu::TextureFormat::Bgra8Unorm),
             };
 
-            let hal_device = unsafe { self.inner.device.as_hal::<hal::api::Vulkan>() }.ok_or(WgpuError::DmaBufImportNotSupported)?;
+            let hal_device = unsafe { self.inner.device.as_hal::<hal::api::Vulkan>() }
+                .ok_or(WgpuError::DmaBufImportNotSupported)?;
             let ash_device = hal_device.raw_device();
 
             let mut external_memory_image_create_info = ash::vk::ExternalMemoryImageCreateInfo::default()
@@ -759,8 +882,9 @@ impl ImportDma for WgpuRenderer {
                 .initial_layout(ash::vk::ImageLayout::UNDEFINED)
                 .push_next(&mut external_memory_image_create_info)
                 .push_next(&mut modifier_info);
-            
-            let image = unsafe { ash_device.create_image(&image_create_info, None) }.map_err(|e| WgpuError::Wgpu(e.to_string()))?;
+
+            let image = unsafe { ash_device.create_image(&image_create_info, None) }
+                .map_err(|e| WgpuError::Wgpu(e.to_string()))?;
 
             let memory_requirements = unsafe { ash_device.get_image_memory_requirements(image) };
             let memory_type_index = self
@@ -775,19 +899,25 @@ impl ImportDma for WgpuRenderer {
                     )
                     .unwrap_or(0)
                 });
-            
+
             use std::os::unix::io::AsRawFd;
             let mut import_memory_fd_info = ash::vk::ImportMemoryFdInfoKHR::default()
                 .handle_type(ash::vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-                .fd(dmabuf.handles().next().ok_or(WgpuError::DmaBufImportNotSupported)?.as_raw_fd());
-            
+                .fd(dmabuf
+                    .handles()
+                    .next()
+                    .ok_or(WgpuError::DmaBufImportNotSupported)?
+                    .as_raw_fd());
+
             let memory_allocate_info = ash::vk::MemoryAllocateInfo::default()
                 .allocation_size(memory_requirements.size)
                 .memory_type_index(memory_type_index)
                 .push_next(&mut import_memory_fd_info);
-            
-            let memory = unsafe { ash_device.allocate_memory(&memory_allocate_info, None) }.map_err(|e| WgpuError::Wgpu(e.to_string()))?;
-            unsafe { ash_device.bind_image_memory(image, memory, 0) }.map_err(|e| WgpuError::Wgpu(e.to_string()))?;
+
+            let memory = unsafe { ash_device.allocate_memory(&memory_allocate_info, None) }
+                .map_err(|e| WgpuError::Wgpu(e.to_string()))?;
+            unsafe { ash_device.bind_image_memory(image, memory, 0) }
+                .map_err(|e| WgpuError::Wgpu(e.to_string()))?;
 
             let desc = wgpu::TextureDescriptor {
                 label: Some("imported_dmabuf"),
@@ -878,8 +1008,8 @@ impl ImportMemWl for WgpuRenderer {
         with_buffer_contents(buffer, |ptr, len, data| {
             let width = data.width;
             let height = data.height;
-            let fourcc = shm_format_to_fourcc(data.format)
-                .ok_or(WgpuError::UnsupportedWlPixelFormat(data.format))?;
+            let fourcc =
+                shm_format_to_fourcc(data.format).ok_or(WgpuError::UnsupportedWlPixelFormat(data.format))?;
 
             let id = self.context_id();
             let cached_texture = surface_lock
@@ -888,13 +1018,17 @@ impl ImportMemWl for WgpuRenderer {
                 .filter(|texture| texture.size == (width, height).into());
 
             let texture = if let Some(texture) = cached_texture {
-                let data_slice = unsafe { std::slice::from_raw_parts(ptr.add(data.offset as usize), len - data.offset as usize) };
+                let data_slice = unsafe {
+                    std::slice::from_raw_parts(ptr.add(data.offset as usize), len - data.offset as usize)
+                };
                 if !damage.is_empty() {
                     self.update_memory(&texture, data_slice, Rectangle::from_size((width, height).into()))?;
                 }
                 texture
             } else {
-                let data_slice = unsafe { std::slice::from_raw_parts(ptr.add(data.offset as usize), len - data.offset as usize) };
+                let data_slice = unsafe {
+                    std::slice::from_raw_parts(ptr.add(data.offset as usize), len - data.offset as usize)
+                };
                 let texture = self.import_memory(data_slice, fourcc, (width, height).into(), false)?;
                 if let Some(cache) = surface_lock.as_mut() {
                     cache.insert(id, texture.clone());
@@ -976,7 +1110,10 @@ mod tests {
             .expect("Failed to begin rendering");
 
         frame
-            .clear(Color32F::new(1.0, 0.0, 0.0, 1.0), &[Rectangle::from_size((size.w, size.h).into())])
+            .clear(
+                Color32F::new(1.0, 0.0, 0.0, 1.0),
+                &[Rectangle::from_size((size.w, size.h).into())],
+            )
             .expect("Failed to clear");
 
         frame

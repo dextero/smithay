@@ -81,7 +81,7 @@ impl RatatuiHandler {
             [&state.space],
             &[],
             &mut self.damage_tracker,
-            [0.1, 0.1, 0.1, 1.0],
+            [0.1, 0.1, 0.4, 1.0],
         )
         .unwrap();
 
