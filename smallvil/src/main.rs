@@ -2,12 +2,10 @@
 
 mod handlers;
 
-mod gpu_renderer;
 mod grabs;
 mod input;
 mod ratatui;
 mod state;
-mod vulkan_import;
 mod winit;
 
 use smithay::reexports::{
