@@ -43,6 +43,8 @@ struct RatatuiHandler {
     damage_tracker: OutputDamageTracker,
     backend: ratatui::RatatuiBackend,
     tx: mpsc::Sender<Option<wgpu::Texture>>,
+    debug_frame: Option<u32>,
+    frame_count: u32,
 }
 
 impl RatatuiHandler {
@@ -145,6 +147,20 @@ impl RatatuiHandler {
         state.space.refresh();
         state.popups.cleanup();
         let _ = display.flush_clients();
+
+        self.frame_count += 1;
+        if let Some(debug_frame) = self.debug_frame {
+            if self.frame_count == debug_frame {
+                eprintln!("Saving debug screenshot for frame {} to /tmp/screenshot.png", debug_frame);
+                pollster::block_on(save_texture_to_file(
+                    self.wgpu_renderer.device(),
+                    self.wgpu_renderer.queue(),
+                    wgpu_texture.wgpu_texture(),
+                    "/tmp/screenshot.png",
+                )).expect("Failed to save debug screenshot");
+                std::process::exit(0);
+            }
+        }
     }
 }
 
@@ -201,7 +217,7 @@ pub async fn save_texture_to_file(
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
         tx.send(v).ok();
     });
-    device.poll(wgpu::PollType::wait_indefinitely());
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
 
     if let Ok(Ok(())) = rx.await {
         let data = buffer_slice.get_mapped_range();
@@ -336,6 +352,10 @@ pub fn init_ratatui(
 
     let damage_tracker = OutputDamageTracker::from_output(&output);
 
+    let debug_frame = std::env::var("DEBUG")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok());
+
     let mut handler = RatatuiHandler {
         renderer,
         wgpu_renderer,
@@ -344,6 +364,8 @@ pub fn init_ratatui(
         damage_tracker,
         backend,
         tx,
+        debug_frame,
+        frame_count: 0,
     };
 
     event_loop
