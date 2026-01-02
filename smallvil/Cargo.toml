@@ -23,4 +23,4 @@ anyhow = "1.0.100"
 [dependencies.smithay]
 path = "../"
 default-features = false
-features = ["backend_winit", "backend_ratatui", "wayland_frontend", "desktop"]
+features = ["backend_winit", "backend_ratatui", "renderer_wgpu", "wayland_frontend", "desktop"]

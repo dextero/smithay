@@ -36,6 +36,10 @@ pub mod pixman;
 #[cfg(feature = "backend_ratatui")]
 pub mod ratatui;
 
+/// wgpu renderer
+#[cfg(feature = "renderer_wgpu")]
+pub mod wgpu;
+
 mod color;
 pub use color::Color32F;
 
