@@ -1,6 +1,6 @@
 # WARNING
 
-This form contains a bunch of *awful* hacks to make `smallvil/` a Wayland compositor that attempts to render to a terminal.
+This repo contains a bunch of *awful* hacks to make `ansivil`, a Wayland compositor that attempts to render to a terminal.
 
 ## Wait what why
 
@@ -8,22 +8,23 @@ Idk, it sounded funny in my head
 
 ## Details
 
-* Ratatui + crossterm is used as the backend renderer.
+* Ratatui + crossterm is used for input handling and general interaction with the terminal.
 * All pixels are converted to series of U+2584 LOWER HALF BLOCK characters - each row of characters corresponds to 2 consecutive rows of pixels.
+* Coloring is done by using `wgpu` to convert images into sequences of ANSI characters.
 * Display resolution is inferred from the terminal size.
 
 Jank:
 
 * Mouse coordinates can't handle resizing the window after startup.
-* IT'S SLOOOOOOOW
+* It's slow - terminal emulators can't keep up handling all those ANSI escape sequences.
 * You can't stop it with Ctrl+C, only `kill` it from another terminal
 
 With that said, to try this mess out run:
 
 ```
-cd smallvil && cargo run --release 2>/dev/null
+cd ansivil && cargo run --release 2>/dev/null
 # shut down from another terminal
-killall smallvil
+killall ansivil
 ```
 
 Note: works ~best~least bad with [alacritty](https://alacritty.org/) configured to use a font with 2x1 pixel sized characters:
@@ -40,7 +41,7 @@ size = 1
 ```
 
 ```
-alacritty --config-file tiny-font.toml --command bash -c "cd $PWD && cargo run --release 2>/tmp/log"
+alacritty --config-file tiny-font.toml --command bash -c "cd $PWD/ansivil && cargo run --release 2>/tmp/log"
 ```
 
 <img align="right" width="25%" src="https://github.com/Smithay/smithay/assets/20758186/7a84ab10-e229-4823-bad8-9c647546407b">
