@@ -11,7 +11,7 @@ tracing = "0.1.41"
 ratatui = { version = "0.29.0", features = ["crossterm"] }
 wgpu = { version = "27.0.1", features = ["vulkan"] }
 wgpu-hal = { version = "27.0.1", features = ["vulkan"] }
-gpu_ansi_encoder = { path = "../rust-gpu-test" }
+gpu_ansi_encoder = { git = "https://github.com/dextero/gpu-ansi-encoder" }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync"] }
 futures = "0.3.31"
 pollster = "0.4.0"
