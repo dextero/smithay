@@ -7,10 +7,9 @@ use smithay::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
-    reexports::wayland_server::{protocol::wl_surface::WlSurface, Resource},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::SERIAL_COUNTER,
 };
-use tracing::debug;
 
 use crate::state::Smallvil;
 
@@ -20,12 +19,6 @@ impl Smallvil {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
-
-                debug!(
-                    "Processing Keyboard Input: key_code={:?}, state={:?}",
-                    event.key_code(),
-                    event.state()
-                );
 
                 self.seat.get_keyboard().unwrap().input::<(), _>(
                     self,
@@ -39,17 +32,16 @@ impl Smallvil {
             InputEvent::PointerMotion { .. } => {}
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let output = self.space.outputs().next().unwrap();
-                let output_geo = self.space.output_geometry(output).unwrap();
-                let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
-                let serial = SERIAL_COUNTER.next_serial();
-                let pointer = self.seat.get_pointer().unwrap();
-                let under = self.surface_under(pos);
 
-                debug!(
-                    "Pointer Motion Absolute: pos={:?}, under={:?}",
-                    pos,
-                    under.as_ref().map(|(s, _)| s.id())
-                );
+                let output_geo = self.space.output_geometry(output).unwrap();
+
+                let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
+
+                let serial = SERIAL_COUNTER.next_serial();
+
+                let pointer = self.seat.get_pointer().unwrap();
+
+                let under = self.surface_under(pos);
 
                 pointer.motion(
                     self,
@@ -65,16 +57,12 @@ impl Smallvil {
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();
                 let keyboard = self.seat.get_keyboard().unwrap();
-                let serial = SERIAL_COUNTER.next_serial();
-                let button = event.button_code();
-                let button_state = event.state();
 
-                debug!(
-                    "Pointer Button: button={:?}, state={:?}, pos={:?}",
-                    button,
-                    button_state,
-                    pointer.current_location()
-                );
+                let serial = SERIAL_COUNTER.next_serial();
+
+                let button = event.button_code();
+
+                let button_state = event.state();
 
                 if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
                     if let Some((window, _loc)) = self
@@ -82,7 +70,6 @@ impl Smallvil {
                         .element_under(pointer.current_location())
                         .map(|(w, l)| (w.clone(), l))
                     {
-                        debug!("Focusing window: {:?}", window);
                         self.space.raise_element(&window, true);
                         keyboard.set_focus(
                             self,
@@ -93,7 +80,6 @@ impl Smallvil {
                             window.toplevel().unwrap().send_pending_configure();
                         });
                     } else {
-                        debug!("Click on empty space, clearing focus");
                         self.space.elements().for_each(|window| {
                             window.set_activated(false);
                             window.toplevel().unwrap().send_pending_configure();

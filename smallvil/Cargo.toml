@@ -6,32 +6,12 @@ edition = "2021"
 [dependencies]
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 bitflags = "2.2.1"
-crossterm = "0.28.0"
-tracing = "0.1.41"
-ratatui = { version = "0.29.0", features = ["crossterm"] }
-wgpu = { version = "27.0.1", features = ["vulkan"] }
-wgpu-hal = { version = "27.0.1", features = ["vulkan"] }
-gpu_ansi_encoder = { path = "../rust-gpu-test" }
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync"] }
-futures = "0.3.31"
-pollster = "0.4.0"
-bytemuck = { version = "1.13.1", features = ["derive"] }
-ash = "0.38.0"
-image = "0.25"
-anyhow = "1.0.100"
-gbm = { version = "0.18.0", default-features = false, features = ["drm-support"] }
-drm = "0.14.0"
-thiserror = "2.0.12"
-wayland-server = "0.31.9"
 
 [dependencies.smithay]
 path = "../"
 default-features = false
 features = [
     "backend_winit",
-    "backend_ratatui",
-    "backend_gbm",
-    "renderer_gl",
     "wayland_frontend",
     "desktop",
 ]

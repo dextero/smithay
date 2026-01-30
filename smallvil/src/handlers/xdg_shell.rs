@@ -5,19 +5,16 @@ use smithay::{
         pointer::{Focus, GrabStartData as PointerGrabStartData},
         Seat,
     },
-    output::Output,
     reexports::{
-        wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1,
         wayland_protocols::xdg::shell::server::xdg_toplevel,
         wayland_server::{
-            protocol::{wl_output, wl_seat, wl_surface::WlSurface},
+            protocol::{wl_seat, wl_surface::WlSurface},
             Resource,
         },
     },
-    utils::{Logical, Rectangle, Serial},
+    utils::{Rectangle, Serial},
     wayland::{
         compositor::with_states,
-        seat::WaylandFocus,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
             XdgToplevelSurfaceData,
@@ -29,25 +26,6 @@ use crate::{
     grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
     Smallvil,
 };
-
-fn fullscreen_output_geometry(
-    wl_surface: &WlSurface,
-    wl_output: Option<&wl_output::WlOutput>,
-    space: &mut Space<Window>,
-) -> Option<Rectangle<i32, Logical>> {
-    // First test if a specific output has been requested
-    // if the requested output is not found ignore the request
-    wl_output
-        .and_then(Output::from_resource)
-        .or_else(|| {
-            let w = space
-                .elements()
-                .find(|window| window.wl_surface().map(|s| &*s == wl_surface).unwrap_or(false));
-            w.and_then(|w| space.outputs_for_element(w).first().cloned())
-        })
-        .as_ref()
-        .and_then(|o| space.output_geometry(o))
-}
 
 impl XdgShellHandler for Smallvil {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
@@ -142,56 +120,6 @@ impl XdgShellHandler for Smallvil {
 
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
         // TODO popup grabs
-    }
-
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, mut wl_output: Option<wl_output::WlOutput>) {
-        if surface
-            .current_state()
-            .capabilities
-            .contains(xdg_toplevel::WmCapabilities::Fullscreen)
-        {
-            // NOTE: This is only one part of the solution. We can set the
-            // location and configure size here, but the surface should be rendered fullscreen
-            // independently from its buffer size
-            let wl_surface = surface.wl_surface();
-
-            let output_geometry = fullscreen_output_geometry(wl_surface, wl_output.as_ref(), &mut self.space);
-
-            if let Some(geometry) = output_geometry {
-                let output = wl_output
-                    .as_ref()
-                    .and_then(Output::from_resource)
-                    .unwrap_or_else(|| self.space.outputs().next().unwrap().clone());
-                let client = match self.display_handle.get_client(wl_surface.id()) {
-                    Ok(client) => client,
-                    Err(_) => return,
-                };
-                for output in output.client_outputs(&client) {
-                    wl_output = Some(output);
-                }
-                let window = self
-                    .space
-                    .elements()
-                    .find(|window| window.wl_surface().map(|s| &*s == wl_surface).unwrap_or(false))
-                    .unwrap();
-
-                surface.with_pending_state(|state| {
-                    state.states.set(xdg_toplevel::State::Fullscreen);
-                    state.size = Some(geometry.size);
-                    state.fullscreen_output = wl_output;
-                    state.decoration_mode = Some(zxdg_toplevel_decoration_v1::Mode::ClientSide);
-                });
-                eprintln!("Fullscreening: {:?}", window);
-            }
-        }
-
-        // The protocol demands us to always reply with a configure,
-        // regardless of we fulfilled the request or not
-        if surface.is_initial_configure_sent() {
-            surface.send_configure();
-        } else {
-            // Will be sent during initial configure
-        }
     }
 }
 

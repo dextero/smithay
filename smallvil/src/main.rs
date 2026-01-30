@@ -4,10 +4,8 @@ mod handlers;
 
 mod grabs;
 mod input;
-mod ratatui;
 mod state;
 mod winit;
-mod wgpu_renderer;
 
 use smithay::reexports::{
     calloop::EventLoop,
@@ -20,15 +18,11 @@ pub struct CalloopData {
     display_handle: DisplayHandle,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
-        tracing_subscriber::fmt()
-            .with_writer(std::io::stderr)
-            .with_env_filter(env_filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
     } else {
-        tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+        tracing_subscriber::fmt().init();
     }
 
     let mut event_loop: EventLoop<CalloopData> = EventLoop::try_new()?;
@@ -42,11 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_handle,
     };
 
-    if std::env::var("BACKEND").map(|s| s == "winit").unwrap_or(false) {
-        crate::winit::init_winit(&mut event_loop, &mut data)?;
-    } else {
-        crate::ratatui::init_ratatui(&mut event_loop, &mut data)?;
-    }
+    crate::winit::init_winit(&mut event_loop, &mut data)?;
 
     let mut args = std::env::args().skip(1);
     let flag = args.next();
