@@ -88,7 +88,7 @@ impl AnsiHandler {
 
     fn redraw(&mut self, state: &mut Smallvil, display: &mut DisplayHandle) {
         let size = self.output.current_mode().unwrap().size;
-        eprintln!("redraw, size = {size:?}");
+        //eprintln!("redraw, size = {size:?}");
 
         // Allocate a Dmabuf
         let mut dmabuf = match self.allocator.create_buffer(
