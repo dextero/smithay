@@ -9,7 +9,7 @@ Idk, it sounded funny in my head
 ## Details
 
 * Ratatui + crossterm is used for input handling and general interaction with the terminal.
-* All pixels are converted to series of U+2584 LOWER HALF BLOCK characters - each row of characters corresponds to 2 consecutive rows of pixels.
+* All pixels are converted to series of U+2580 UPPER HALF BLOCK characters - each row of characters corresponds to 2 consecutive rows of pixels.
 * Coloring is done by using `wgpu` to convert images into sequences of ANSI characters.
 * Display resolution is inferred from the terminal size.
 
