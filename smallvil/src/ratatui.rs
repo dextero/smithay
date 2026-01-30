@@ -1,33 +1,28 @@
-use std::os::fd::FromRawFd;
-use std::{fs::File, io::Write, path::Path};
 use image::{ImageBuffer, Rgba};
+use std::os::fd::FromRawFd;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs::File, io::Write, path::Path};
 
+use crate::wgpu_renderer::WgpuRenderer;
 use smithay::{
     backend::{
         allocator::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-            Fourcc, Modifier, Allocator,
+            Allocator, Fourcc, Modifier,
         },
         egl::{EGLContext, EGLDisplay},
         input::InputEvent,
         ratatui::{self, RatatuiEvent, RatatuiInputBackend, RatatuiMouseEvent},
         renderer::{
-            damage::OutputDamageTracker,
-            element::surface::WaylandSurfaceRenderElement,
-            gles::GlesRenderer,
+            damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer,
             Bind, ImportDma,
         },
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
-    reexports::{
-        calloop::EventLoop,
-        wayland_server::DisplayHandle,
-    },
+    reexports::{calloop::EventLoop, wayland_server::DisplayHandle},
     utils::Transform,
 };
-use crate::wgpu_renderer::WgpuRenderer;
 use tracing::{debug, error};
 
 use crate::{CalloopData, Smallvil};
@@ -93,7 +88,8 @@ impl RatatuiHandler {
 
     fn redraw(&mut self, state: &mut Smallvil, display: &mut DisplayHandle) {
         let size = self.output.current_mode().unwrap().size;
-        
+        eprintln!("redraw, size = {size:?}");
+
         // Allocate a Dmabuf
         let mut dmabuf = match self.allocator.create_buffer(
             size.w as u32,
@@ -104,7 +100,7 @@ impl RatatuiHandler {
             Ok(bo) => {
                 use smithay::backend::allocator::dmabuf::AsDmabuf;
                 bo.export().expect("Failed to export dmabuf")
-            },
+            }
             Err(err) => {
                 error!("Failed to allocate dmabuf: {}", err);
                 return;
@@ -114,7 +110,7 @@ impl RatatuiHandler {
         // Bind and render
         {
             let mut target = self.renderer.bind(&mut dmabuf).expect("Failed to bind dmabuf");
-            
+
             smithay::desktop::space::render_output(
                 &self.output,
                 &mut self.renderer,
@@ -125,12 +121,16 @@ impl RatatuiHandler {
                 &[] as &[WaylandSurfaceRenderElement<GlesRenderer>],
                 &mut self.damage_tracker,
                 [0.1f32, 0.1, 0.4, 1.0],
-            ).expect("Failed to render output");
+            )
+            .expect("Failed to render output");
         }
 
         // Import to WGPU
-        let wgpu_texture = self.wgpu_renderer.import_dmabuf(&dmabuf, None).expect("Failed to import dmabuf to wgpu");
-        
+        let wgpu_texture = self
+            .wgpu_renderer
+            .import_dmabuf(&dmabuf, None)
+            .expect("Failed to import dmabuf to wgpu");
+
         // Send to encoding task
         let _ = self.tx.try_send(Some(wgpu_texture.wgpu_texture().clone()));
 
@@ -151,13 +151,17 @@ impl RatatuiHandler {
         self.frame_count += 1;
         if let Some(debug_frame) = self.debug_frame {
             if self.frame_count == debug_frame {
-                eprintln!("Saving debug screenshot for frame {} to /tmp/screenshot.png", debug_frame);
+                eprintln!(
+                    "Saving debug screenshot for frame {} to /tmp/screenshot.png",
+                    debug_frame
+                );
                 pollster::block_on(save_texture_to_file(
                     self.wgpu_renderer.device(),
                     self.wgpu_renderer.queue(),
                     wgpu_texture.wgpu_texture(),
                     "/tmp/screenshot.png",
-                )).expect("Failed to save debug screenshot");
+                ))
+                .expect("Failed to save debug screenshot");
                 std::process::exit(0);
             }
         }
@@ -228,14 +232,14 @@ pub async fn save_texture_to_file(
         }
 
         let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
-        
+
         for (idx, pixel) in result.chunks_exact(4).enumerate() {
             let x = (idx as u32) % width;
             let y = (idx as u32) / width;
             // BGRA -> RGBA
             img.put_pixel(x, y, Rgba([pixel[2], pixel[1], pixel[0], 255]));
         }
-        
+
         img.save(path)?;
         drop(data);
         staging_buffer.unmap();
@@ -259,11 +263,16 @@ pub fn init_ratatui(
         .filter_map(|path| smithay::backend::drm::DrmNode::from_path(path).ok())
         .next()
         .ok_or_else(|| Box::<dyn std::error::Error>::from("No render node found"))?;
-    
-    let fd = Arc::new(std::fs::OpenOptions::new().read(true).write(true).open(drm_node.dev_path().unwrap())?);
+
+    let fd = Arc::new(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(drm_node.dev_path().unwrap())?,
+    );
     let gbm_egl = GbmDevice::new(fd.clone())?;
     let gbm_alloc = GbmDevice::new(fd)?;
-    
+
     let egl_display = unsafe { EGLDisplay::new(gbm_egl) }.expect("Failed to create EGLDisplay");
     let egl_context = EGLContext::new(&egl_display).expect("Failed to create EGLContext");
     let renderer = unsafe { GlesRenderer::new(egl_context).expect("Failed to create GlesRenderer") };
@@ -352,9 +361,7 @@ pub fn init_ratatui(
 
     let damage_tracker = OutputDamageTracker::from_output(&output);
 
-    let debug_frame = std::env::var("DEBUG")
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok());
+    let debug_frame = std::env::var("DEBUG").ok().and_then(|s| s.parse::<u32>().ok());
 
     let mut handler = RatatuiHandler {
         renderer,

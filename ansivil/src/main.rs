@@ -4,9 +4,8 @@ mod handlers;
 
 mod grabs;
 mod input;
-mod ratatui;
+mod ansi;
 mod state;
-mod winit;
 mod wgpu_renderer;
 
 use smithay::reexports::{
@@ -42,11 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         display_handle,
     };
 
-    if std::env::var("BACKEND").map(|s| s == "winit").unwrap_or(false) {
-        crate::winit::init_winit(&mut event_loop, &mut data)?;
-    } else {
-        crate::ratatui::init_ratatui(&mut event_loop, &mut data)?;
-    }
+    crate::ansi::init_ansi(&mut event_loop, &mut data)?;
 
     let mut args = std::env::args().skip(1);
     let flag = args.next();

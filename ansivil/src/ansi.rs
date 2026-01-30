@@ -30,7 +30,7 @@ use gpu_ansi_encoder::GpuAnsiEncoder;
 
 use tokio::sync::mpsc;
 
-struct RatatuiHandler {
+struct AnsiHandler {
     renderer: GlesRenderer,
     wgpu_renderer: WgpuRenderer,
     allocator: GbmAllocator<Arc<File>>,
@@ -42,7 +42,7 @@ struct RatatuiHandler {
     frame_count: u32,
 }
 
-impl RatatuiHandler {
+impl AnsiHandler {
     fn handle_event(&mut self, event: RatatuiEvent, state: &mut Smallvil, display: &mut DisplayHandle) {
         match event {
             RatatuiEvent::Redraw => {
@@ -249,7 +249,7 @@ pub async fn save_texture_to_file(
     }
 }
 
-pub fn init_ratatui(
+pub fn init_ansi(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -286,7 +286,7 @@ pub fn init_ratatui(
     };
 
     let output = Output::new(
-        "ratatui".to_string(),
+        "ansi".to_string(),
         PhysicalProperties {
             size: (0, 0).into(),
             subpixel: Subpixel::Unknown,
@@ -363,7 +363,7 @@ pub fn init_ratatui(
 
     let debug_frame = std::env::var("DEBUG").ok().and_then(|s| s.parse::<u32>().ok());
 
-    let mut handler = RatatuiHandler {
+    let mut handler = AnsiHandler {
         renderer,
         wgpu_renderer,
         allocator,

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use wgpu::{self};
 use wgpu::util::DeviceExt;
+use wgpu::{self};
 use wgpu_hal as hal;
 
 use smithay::backend::allocator::{Buffer as BufferTrait, Fourcc};
@@ -41,27 +41,9 @@ pub struct WgpuTexture {
     pub(super) view: Arc<wgpu::TextureView>,
     pub(super) size: Size<i32, Buffer>,
     pub(super) format: Option<Fourcc>,
-    pub(super) has_alpha: bool,
 }
 
 impl WgpuTexture {
-    /// Create a new WgpuTexture from an existing wgpu texture and view
-    pub fn new(
-        texture: wgpu::Texture,
-        view: wgpu::TextureView,
-        size: Size<i32, Buffer>,
-        format: Option<Fourcc>,
-        has_alpha: bool,
-    ) -> Self {
-        Self {
-            texture: Arc::new(texture),
-            view: Arc::new(view),
-            size,
-            format,
-            has_alpha,
-        }
-    }
-
     /// Get a reference to the underlying wgpu texture
     pub fn wgpu_texture(&self) -> &wgpu::Texture {
         &self.texture
@@ -305,7 +287,6 @@ pub struct WgpuFrame<'frame, 'buffer> {
     transform: Transform,
     _phantom: std::marker::PhantomData<&'buffer ()>,
 }
-
 
 impl<'frame, 'buffer> std::fmt::Debug for WgpuFrame<'frame, 'buffer> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -585,9 +566,6 @@ pub enum WgpuError {
     /// DmaBuf import is not supported on this wgpu backend
     #[error("DmaBuf import is not supported")]
     DmaBufImportNotSupported,
-    /// Failed to allocate memory on the GPU
-    #[error("Failed to allocate memory on the GPU")]
-    OutOfMemory,
 }
 
 impl RendererSuper for WgpuRenderer {
@@ -746,7 +724,6 @@ impl ImportMem for WgpuRenderer {
             view: Arc::new(view),
             size,
             format: Some(format),
-            has_alpha: smithay::backend::allocator::format::has_alpha(format),
         })
     }
 
@@ -940,7 +917,6 @@ impl ImportDma for WgpuRenderer {
                 view: Arc::new(view),
                 size: size.into(),
                 format: Some(format.code),
-                has_alpha: smithay::backend::allocator::format::has_alpha(format.code),
             })
         }
     }
