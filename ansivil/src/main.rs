@@ -2,9 +2,9 @@
 
 mod handlers;
 
+mod ansi;
 mod grabs;
 mod input;
-mod ansi;
 mod state;
 mod wgpu_renderer;
 
